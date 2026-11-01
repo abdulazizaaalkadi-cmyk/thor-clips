@@ -21,6 +21,26 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- Second home-screen icon that opens the clip list directly. -->
+        <activity
+            android:name=".ClipsActivity"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_gallery"
+            android:label="My Clips"
+            android:taskAffinity="com.aziz.thorclips.clips">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <service

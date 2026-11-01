@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="acc_desc">Listens for L3 + R3 (pressing both sticks) and saves the last few seconds of both screens as a clip. It only looks at those two buttons and never blocks them from your game.</string>
+    <string name="shortcut_clips">My Clips</string>
 </resources>

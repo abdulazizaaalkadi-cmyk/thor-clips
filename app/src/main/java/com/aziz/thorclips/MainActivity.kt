@@ -152,6 +152,11 @@ class MainActivity : Activity() {
             }
         })
 
+        col.addView(Button(this).apply {
+            text = "Open my clips"
+            setOnClickListener { startActivity(Intent(this@MainActivity, ClipsActivity::class.java)) }
+        })
+
         col.addView(header("Diagnostics"))
         diagView = TextView(this).apply {
             textSize = 12f
