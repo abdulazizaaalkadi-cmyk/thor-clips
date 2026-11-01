@@ -156,6 +156,10 @@ class MainActivity : Activity() {
             text = "Open my clips"
             setOnClickListener { startActivity(Intent(this@MainActivity, ClipsActivity::class.java)) }
         })
+        col.addView(Button(this).apply {
+            text = "Add My Clips to home screen / Cocoon"
+            setOnClickListener { pinClipsShortcut() }
+        })
 
         col.addView(header("Diagnostics"))
         diagView = TextView(this).apply {
@@ -210,6 +214,29 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------ actions
+
+    /** Asks the default launcher (Cocoon) to pin a "My Clips" shortcut. */
+    private fun pinClipsShortcut() {
+        val sm = getSystemService(android.content.pm.ShortcutManager::class.java)
+        if (sm == null || !sm.isRequestPinShortcutSupported) {
+            Toast.makeText(this, "Your launcher doesn't accept shortcuts. Make Cocoon the default launcher first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val intent = Intent(this, ClipsActivity::class.java).setAction(Intent.ACTION_VIEW)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        val info = android.content.pm.ShortcutInfo.Builder(this, "my-clips-pinned")
+            .setShortLabel("My Clips")
+            .setLongLabel("My Clips")
+            .setIcon(android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_gallery))
+            .setIntent(intent)
+            .build()
+        val ok = sm.requestPinShortcut(info, null)
+        Toast.makeText(
+            this,
+            if (ok) "Sent to your launcher. In Cocoon: Start → New → Add Games → My Clips" else "Launcher refused the shortcut",
+            Toast.LENGTH_LONG
+        ).show()
+    }
 
     private fun askBasicPermissions() {
         val want = mutableListOf<String>()
