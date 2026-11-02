@@ -55,8 +55,8 @@ class CaptureUserService() : ICaptureService.Stub() {
     override fun startRecording(config: android.os.Bundle): Int = recorder.start(config)
     override fun stopRecording() = recorder.stop()
     override fun recorderStatus(): String = recorder.status()
-    override fun saveClip(out: android.os.ParcelFileDescriptor, seconds: Int): Long = recorder.saveClip(out, seconds)
-    override fun screenshot(out: android.os.ParcelFileDescriptor): Boolean = recorder.screenshot(out)
+    override fun saveClip(fd: android.os.ParcelFileDescriptor, seconds: Int): Long = recorder.saveClip(fd, seconds)
+    override fun screenshot(fd: android.os.ParcelFileDescriptor): Boolean = recorder.screenshot(fd)
     override fun takeLog(): String = recorder.takeLog()
 
     override fun destroy() {

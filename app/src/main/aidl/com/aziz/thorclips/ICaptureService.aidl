@@ -28,9 +28,9 @@ interface ICaptureService {
     void stopRecording() = 6;
     // "state=recording;live=BOTH;layout=1280x1440;codec=...;game=...;err=..."
     String recorderStatus() = 7;
-    // Writes the last N seconds (video only) to out; returns start time in µs or -1.
-    long saveClip(in ParcelFileDescriptor out, int seconds) = 8;
-    boolean screenshot(in ParcelFileDescriptor out) = 9;
+    // Writes the last N seconds (video only) to fd; returns start time in microseconds or -1.
+    long saveClip(in ParcelFileDescriptor fd, int seconds) = 8;
+    boolean screenshot(in ParcelFileDescriptor fd) = 9;
     // Helper log lines since the last call.
     String takeLog() = 10;
 }
