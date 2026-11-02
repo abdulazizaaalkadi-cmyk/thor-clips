@@ -57,11 +57,13 @@ object ClipStore {
             MediaStore.MediaColumns.SIZE,
         )
         if (!images) projection += MediaStore.Video.Media.DURATION
+        val folders = Settings(ctx).knownFolders.map { "%$root/$it/%" } + "%$EXPORT_FOLDER/%"
+        val where = folders.joinToString(" OR ") { "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?" }
         ctx.contentResolver.query(
             table,
             projection.toTypedArray(),
-            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-            arrayOf("%$root/${ReplayService.CLIP_FOLDER}%", "%$root/ThorClips%"),
+            where,
+            folders.toTypedArray(),
             null
         )?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
@@ -83,6 +85,29 @@ object ClipStore {
             }
         }
         return out
+    }
+
+    /** Volume new files go to: the SD card if chosen and present, else Thor storage. */
+    fun saveVolume(ctx: Context): String {
+        val st = Settings(ctx)
+        if (st.saveToSd) sdCardVolume(ctx)?.let { return it.first }
+        return MediaStore.VOLUME_EXTERNAL_PRIMARY
+    }
+
+    fun saveTable(ctx: Context, image: Boolean): Uri {
+        val v = saveVolume(ctx)
+        return if (image) MediaStore.Images.Media.getContentUri(v) else MediaStore.Video.Media.getContentUri(v)
+    }
+
+    fun relativePath(ctx: Context, image: Boolean): String =
+        (if (image) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/" + Settings(ctx).folderName
+
+    /** Human-readable "where do my clips go" text for settings. */
+    fun saveLocationLabel(ctx: Context): String {
+        val st = Settings(ctx)
+        val sd = sdCardVolume(ctx)
+        val where = if (st.saveToSd && sd != null) sd.second else if (st.saveToSd) "Thor (no SD card found)" else "Thor storage"
+        return "$where › Movies/${st.folderName}"
     }
 
     fun title(c: Clip) = c.name.substringBeforeLast('.')
@@ -201,6 +226,21 @@ object ClipStore {
         return ok to bad
     }
 
+    /** Rewrites a clip keeping only its no-mic audio track (no quality loss). */
+    fun removeMic(ctx: Context, c: Clip): Boolean {
+        val src = java.io.File(ctx.cacheDir, "nomic_src.mp4")
+        val dst = java.io.File(ctx.cacheDir, "nomic_out.mp4")
+        try {
+            ctx.contentResolver.openInputStream(c.uri)!!.use { i -> src.outputStream().use { i.copyTo(it) } }
+            val ok = java.io.FileOutputStream(dst).use { AudioMixer.writeWithoutMic(src, it.fd) }
+            if (!ok) return false
+            ctx.contentResolver.openOutputStream(c.uri, "wt")!!.use { o -> dst.inputStream().use { it.copyTo(o) } }
+            return true
+        } finally {
+            src.delete(); dst.delete()
+        }
+    }
+
     fun play(a: Activity, c: Clip) {
         val i = Intent(Intent.ACTION_VIEW).setDataAndType(c.uri, c.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -303,11 +343,11 @@ object ClipStore {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + ReplayService.CLIP_FOLDER)
+            put(MediaStore.Video.Media.RELATIVE_PATH, relativePath(ctx, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = ctx.contentResolver
-        val out = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        val out = resolver.insert(saveTable(ctx, false), values)
             ?: throw IllegalStateException("couldn't create file")
         try {
             resolver.openFileDescriptor(out, "rw")!!.use { pfd ->

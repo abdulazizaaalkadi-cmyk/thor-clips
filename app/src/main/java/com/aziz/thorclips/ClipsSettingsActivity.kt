@@ -32,6 +32,39 @@ class ClipsSettingsActivity : Activity() {
             ui.choose("Colour", Accent.values().map { it.label to it }, prefs.accent) { prefs.accent = it; build() }
         })
 
+        col.addView(ui.section("Save location"))
+        col.addView(ui.settingRow("Save new clips to", {
+            val st = Settings(this)
+            if (st.saveToSd) "SD card" else "Thor storage"
+        }) { r ->
+            val st = Settings(this)
+            val sd = ClipStore.sdCardVolume(this)
+            val opts = listOf("Thor storage" to false, (if (sd != null) "SD card (${sd.second})" else "SD card (not found)") to true)
+            ui.choose("Save new clips and screenshots to", opts, st.saveToSd) { wantSd ->
+                if (wantSd && sd == null) {
+                    android.widget.Toast.makeText(this, "No SD card found. Insert one set up as portable storage.", android.widget.Toast.LENGTH_LONG).show()
+                } else st.saveToSd = wantSd
+                r()
+            }
+        })
+        col.addView(ui.settingRow("Folder name", { Settings(this).folderName }) { r ->
+            val st = Settings(this)
+            val input = android.widget.EditText(this).apply {
+                setText(st.folderName); setSelectAllOnFocus(true)
+                inputType = android.text.InputType.TYPE_CLASS_TEXT
+            }
+            val box = android.widget.FrameLayout(this).apply { setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0); addView(input) }
+            ui.dialog().setTitle("Folder name").setMessage("Clips go to Movies/<name>, screenshots to Pictures/<name>. Clips already saved stay where they are and still show in My Clips.")
+                .setView(box)
+                .setPositiveButton("Save") { _, _ ->
+                    val clean = input.text.toString().trim().replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    if (clean.isNotEmpty()) st.folderName = clean
+                    r()
+                }.setNegativeButton("Cancel", null).show()
+        })
+        col.addView(ui.text("Only affects new clips — nothing is moved. To move old ones, use Select → Export to SD card.", 13f, dim = true)
+            .apply { setPadding(ui.dp(4), ui.dp(8), 0, 0) })
+
         col.addView(ui.section("Library"))
         col.addView(ui.settingRow("Clip previews", { if (prefs.previews) "On" else "Off" }) { r ->
             prefs.previews = !prefs.previews; r()

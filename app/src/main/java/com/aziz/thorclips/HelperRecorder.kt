@@ -64,6 +64,7 @@ class HelperRecorder(
     @Volatile private var audio: HelperAudio? = null
     @Volatile private var audioState = "off"
     private var wantAudio = true
+    private var voiceChat = true
     private var appUid = -1
     @Volatile private var format: MediaFormat? = null
 
@@ -100,6 +101,7 @@ class HelperRecorder(
         seconds = cfg.getInt("seconds", 30)
         mode = cfg.getString("mode", "AUTO") ?: "AUTO"
         wantAudio = cfg.getBoolean("audio", true)
+        voiceChat = cfg.getBoolean("voiceChat", true)
         appUid = cfg.getInt("appUid", -1)
         launchers = (cfg.getStringArray("launchers") ?: emptyArray()).toSet() +
             setOf("com.android.systemui", "android", "moe.shizuku.privileged.api", "com.aziz.thorclips")
@@ -143,7 +145,7 @@ class HelperRecorder(
         if (!wantAudio) { audioState = "off"; return }
         try {
             val r = SampleRing.fileBacked(ringDir, "audio", (128_000L / 8 * (seconds + 3) * 3 / 2).toInt(), (seconds + 3) * 1_000_000L)
-            audio = HelperAudio(r, appUid) { note(it) }.also { it.start(context()) }
+            audio = HelperAudio(r, appUid, voiceChat) { note(it) }.also { it.start(context()) }
             audioState = "on"
             note("game audio capture on")
         } catch (t: Throwable) {

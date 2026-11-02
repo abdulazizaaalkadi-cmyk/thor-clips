@@ -56,11 +56,60 @@ class SettingsActivity : Activity() {
         col.addView(ui.settingRow("Game audio", { if (s.audio) "On" else "Off" }) { r ->
             s.audio = !s.audio; r()
         })
+        col.addView(ui.settingRow("Voice chat (Discord etc.)", { if (s.voiceChat) "Included" else "Off" }) { r ->
+            s.voiceChat = !s.voiceChat; r()
+        })
+        col.addView(ui.settingRow("My mic", { if (s.mic) "On" else "Off" }) { r ->
+            if (!s.mic && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 31)
+            }
+            s.mic = !s.mic; r()
+        })
+        col.addView(ui.settingRow("Mic volume", {
+            when { s.micGain < 0.85f -> "Quiet"; s.micGain > 1.25f -> "Loud"; else -> "Normal" }
+        }) { r ->
+            ui.choose("Mic volume in clips", listOf("Quiet" to 0.7f, "Normal" to 1.0f, "Loud" to 1.6f), s.micGain) { s.micGain = it; r() }
+        })
+        col.addView(ui.text("With My mic on, each clip keeps a copy of the audio without your voice — " +
+            "hold Y on it in My Clips → Remove my voice.", 13f, dim = true).apply { setPadding(ui.dp(4), ui.dp(8), 0, 0) })
         col.addView(ui.text(
             "Auto watches which screen your game is on and records just that screen, or both. " +
                 "Without Shizuku only the top screen can be recorded. RAM use now: ~${s.estimateMb()} MB. " +
                 "Changes apply next time you start the buffer.", 13f, dim = true
         ).apply { setPadding(ui.dp(4), ui.dp(10), 0, 0) })
+
+        col.addView(ui.section("Save location"))
+        col.addView(ui.settingRow("Save new clips to", {
+            val st = Settings(this)
+            if (st.saveToSd) "SD card" else "Thor storage"
+        }) { r ->
+            val st = Settings(this)
+            val sd = ClipStore.sdCardVolume(this)
+            val opts = listOf("Thor storage" to false, (if (sd != null) "SD card (${sd.second})" else "SD card (not found)") to true)
+            ui.choose("Save new clips and screenshots to", opts, st.saveToSd) { wantSd ->
+                if (wantSd && sd == null) {
+                    android.widget.Toast.makeText(this, "No SD card found. Insert one set up as portable storage.", android.widget.Toast.LENGTH_LONG).show()
+                } else st.saveToSd = wantSd
+                r()
+            }
+        })
+        col.addView(ui.settingRow("Folder name", { Settings(this).folderName }) { r ->
+            val st = Settings(this)
+            val input = android.widget.EditText(this).apply {
+                setText(st.folderName); setSelectAllOnFocus(true)
+                inputType = android.text.InputType.TYPE_CLASS_TEXT
+            }
+            val box = android.widget.FrameLayout(this).apply { setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0); addView(input) }
+            ui.dialog().setTitle("Folder name").setMessage("Clips go to Movies/<name>, screenshots to Pictures/<name>. Clips already saved stay where they are and still show in My Clips.")
+                .setView(box)
+                .setPositiveButton("Save") { _, _ ->
+                    val clean = input.text.toString().trim().replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    if (clean.isNotEmpty()) st.folderName = clean
+                    r()
+                }.setNegativeButton("Cancel", null).show()
+        })
+        col.addView(ui.text("Only affects new clips — nothing is moved. To move old ones, use Select → Export to SD card.", 13f, dim = true)
+            .apply { setPadding(ui.dp(4), ui.dp(8), 0, 0) })
 
         col.addView(ui.section("Buttons"))
         col.addView(ui.settingRow("Save clip", { s.clipCombo.label }) { r ->

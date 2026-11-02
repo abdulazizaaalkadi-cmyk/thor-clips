@@ -26,7 +26,12 @@ import android.os.Process
  * what apps are playing (while still playing it on the device), and read it with an
  * AudioRecord. Apps that opt out of audio capture are still silent.
  */
-class HelperAudio(private val ring: SampleRing, private val excludeUid: Int, private val log: (String) -> Unit) {
+class HelperAudio(
+    private val ring: SampleRing,
+    private val excludeUid: Int,
+    private val voiceChat: Boolean,
+    private val log: (String) -> Unit,
+) {
 
     val ringRef: SampleRing get() = ring
 
@@ -106,9 +111,16 @@ class HelperAudio(private val ring: SampleRing, private val excludeUid: Int, pri
             .invoke(rb, ruleCls.getField("MIX_ROLE_PLAYERS").getInt(null))
         val matchUsage = ruleCls.getField("RULE_MATCH_ATTRIBUTE_USAGE").getInt(null)
         val add = ruleB.getMethod("addMixRule", Int::class.javaPrimitiveType, Any::class.java)
-        for (u in intArrayOf(
-            AudioAttributes.USAGE_GAME, AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_UNKNOWN,
-        )) add.invoke(rb, matchUsage, AudioAttributes.Builder().setUsage(u).build())
+        val usages = mutableListOf(AudioAttributes.USAGE_GAME, AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_UNKNOWN)
+        if (voiceChat) {
+            // Friends talking in Discord etc. come out as "voice communication".
+            usages += AudioAttributes.USAGE_VOICE_COMMUNICATION
+            usages += AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING
+        }
+        for (u in usages) add.invoke(rb, matchUsage, AudioAttributes.Builder().setUsage(u).build())
+        if (voiceChat) runCatching {
+            ruleB.getMethod("voiceCommunicationCaptureAllowed", Boolean::class.javaPrimitiveType).invoke(rb, true)
+        }.onFailure { log("voice chat capture not allowed: ${it.message}") }
         // Leave Dual Clips' own chime out of clips.
         runCatching {
             ruleB.getMethod("excludeMixRule", Int::class.javaPrimitiveType, Any::class.java)

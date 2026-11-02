@@ -55,6 +55,24 @@ class Settings(context: Context) {
         get() = runCatching { Combo.valueOf(prefs.getString("combo_shot", "SELECT_R3")!!) }.getOrDefault(Combo.SELECT_R3)
         set(v) = prefs.edit().putString("combo_shot", v.name).apply()
 
+    /** Where new clips/screenshots go: false = Thor storage, true = SD card. */
+    var saveToSd: Boolean
+        get() = prefs.getBoolean("save_sd", false)
+        set(v) = prefs.edit().putBoolean("save_sd", v).apply()
+
+    /** Folder name inside Movies/ (clips) and Pictures/ (screenshots). */
+    var folderName: String
+        get() = prefs.getString("folder", ReplayService.CLIP_FOLDER) ?: ReplayService.CLIP_FOLDER
+        set(v) {
+            prefs.edit().putString("folder", v).apply()
+            knownFolders = knownFolders + v
+        }
+
+    /** Every folder ever used, so My Clips keeps showing older clips after a change. */
+    var knownFolders: Set<String>
+        get() = (prefs.getStringSet("folders", emptySet()) ?: emptySet()) + setOf(ReplayService.CLIP_FOLDER, "ThorClips")
+        set(v) = prefs.edit().putStringSet("folders", v.toSet()).apply()
+
     var clipSound: Boolean
         get() = prefs.getBoolean("clip_sound", true)
         set(v) = prefs.edit().putBoolean("clip_sound", v).apply()
@@ -63,6 +81,10 @@ class Settings(context: Context) {
     var clipSoundName: String
         get() = prefs.getString("clip_sound_name", "soft") ?: "soft"
         set(v) = prefs.edit().putString("clip_sound_name", v).apply()
+
+    var customSoundLabel: String
+        get() = prefs.getString("custom_label", "Custom sound") ?: "Custom sound"
+        set(v) = prefs.edit().putString("custom_label", v).apply()
 
     var clipVolume: Float
         get() = prefs.getFloat("clip_volume", 0.6f)
@@ -80,6 +102,20 @@ class Settings(context: Context) {
     var clipNotification: Boolean
         get() = prefs.getBoolean("clip_notif", true)
         set(v) = prefs.edit().putBoolean("clip_notif", v).apply()
+
+    /** Record your microphone into clips (mixed in at save; removable per clip). */
+    var mic: Boolean
+        get() = prefs.getBoolean("mic", false)
+        set(v) = prefs.edit().putBoolean("mic", v).apply()
+
+    var micGain: Float
+        get() = prefs.getFloat("mic_gain", 1.0f)
+        set(v) = prefs.edit().putFloat("mic_gain", v).apply()
+
+    /** Include voice-chat apps (Discord etc.) in game audio. */
+    var voiceChat: Boolean
+        get() = prefs.getBoolean("voice_chat", true)
+        set(v) = prefs.edit().putBoolean("voice_chat", v).apply()
 
     var screenMode: ScreenMode
         get() = runCatching { ScreenMode.valueOf(prefs.getString("screens", "AUTO")!!) }.getOrDefault(ScreenMode.AUTO)
@@ -148,6 +184,9 @@ class ClipsPrefs(context: Context) {
     var favourites: Set<String>
         get() = prefs.getStringSet("favs", emptySet()) ?: emptySet()
         set(v) = prefs.edit().putStringSet("favs", v.toSet()).apply()
+
+    fun hasMic(id: Long): Boolean = prefs.getBoolean("mic_$id", false)
+    fun setHasMic(id: Long, v: Boolean) = prefs.edit().putBoolean("mic_$id", v).apply()
 
     fun gameFor(id: Long): String? = prefs.getString("game_$id", null)
     fun setGame(id: Long, pkg: String) = prefs.edit().putString("game_$id", pkg).apply()

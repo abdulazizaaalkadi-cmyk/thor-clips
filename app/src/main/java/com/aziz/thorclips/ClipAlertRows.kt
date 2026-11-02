@@ -14,12 +14,32 @@ object ClipAlertRows {
         val s = Settings(a)
         col.addView(ui.section("When you clip"))
 
-        col.addView(ui.settingRow("Sound", { if (s.clipSound) ClipFeedback.label(s.clipSoundName) else "Off" }) { r ->
-            val opts = listOf("Off" to "off") + ClipFeedback.SOUNDS.map { it.second to it.first }
+        col.addView(ui.settingRow("Sound", {
+            when {
+                !s.clipSound -> "Off"
+                s.clipSoundName == "custom" -> s.customSoundLabel
+                else -> ClipFeedback.label(s.clipSoundName)
+            }
+        }) { r ->
+            val hasCustom = PickSoundActivity.file(a).exists()
+            val opts = listOf("Off" to "off") + ClipFeedback.SOUNDS.map { it.second to it.first } +
+                (if (hasCustom) listOf("★ ${s.customSoundLabel}" to "custom") else emptyList()) +
+                listOf("＋ Upload your own…" to "upload")
             ui.choosePreview("Clip sound", opts, if (s.clipSound) s.clipSoundName else "off",
-                onPreview = { key -> if (key != "off") feedback.playSound(key, s.clipVolume) },
+                onPreview = { key ->
+                    when (key) {
+                        "off" -> {}
+                        "upload" -> a.startActivity(Intent(a, PickSoundActivity::class.java))
+                        "custom" -> ClipFeedback(a).let { f -> f.playSound("custom", s.clipVolume) }
+                        else -> feedback.playSound(key, s.clipVolume)
+                    }
+                },
                 onPick = { key ->
-                    if (key == "off") s.clipSound = false else { s.clipSound = true; s.clipSoundName = key }
+                    when (key) {
+                        "off" -> s.clipSound = false
+                        "upload" -> a.startActivity(Intent(a, PickSoundActivity::class.java))
+                        else -> { s.clipSound = true; s.clipSoundName = key }
+                    }
                     r()
                 })
         })

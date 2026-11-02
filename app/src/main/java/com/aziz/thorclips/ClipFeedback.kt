@@ -74,8 +74,10 @@ class ClipFeedback(private val ctx: Context) {
             val want = pending
             if (want != null && want.first == id) { pending = null; p.play(id, want.second, want.second, 1, 0, 1f) }
         }
+        val custom = PickSoundActivity.file(ctx)
         ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) } +
-            ("shutter" to pool.load(ctx, R.raw.snd_shutter, 1))
+            ("shutter" to pool.load(ctx, R.raw.snd_shutter, 1)) +
+            (if (custom.exists()) mapOf("custom" to pool.load(custom.absolutePath, 1)) else emptyMap())
     }
 
     /** Plays one of the clip sounds (also used for previews in settings). */

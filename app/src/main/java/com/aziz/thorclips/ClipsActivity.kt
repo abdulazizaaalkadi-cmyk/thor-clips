@@ -283,6 +283,7 @@ class ClipsActivity : Activity() {
             "Rename" to { rename(c) },
             "Open in editor" to { openEditor(c) },
             if (c.isImage) null else ("Trim" to { startActivity(Intent(this, TrimActivity::class.java).putExtra("id", c.id)) }),
+            if (!c.isImage && prefs.hasMic(c.id)) ("Remove my voice" to { removeVoice(c) }) else null,
             "Share" to { ClipStore.share(this, c) },
             "Export to SD card" to { exportSd(listOf(c)) },
             (if (fav) "Unfavourite" else "Favourite") to { toggleFav(c) },
@@ -337,6 +338,23 @@ class ClipsActivity : Activity() {
                     .onFailure { Toast.makeText(this, "${e.label} couldn't open it", Toast.LENGTH_SHORT).show() }
                 Toast.makeText(this, "Will use ${e.label} next time (change in My Clips settings)", Toast.LENGTH_SHORT).show()
             }.show()
+    }
+
+    private fun removeVoice(c: Clip) {
+        ui.dialog().setTitle("Remove your voice from this clip?")
+            .setMessage("Keeps the game and voice-chat audio, drops your mic. This can't be undone.")
+            .setPositiveButton("Remove") { _, _ ->
+                Toast.makeText(this, "Removing your voice…", Toast.LENGTH_SHORT).show()
+                Executors.newSingleThreadExecutor().execute {
+                    val ok = runCatching { ClipStore.removeMic(this, c) }.getOrDefault(false)
+                    if (ok) prefs.setHasMic(c.id, false)
+                    main.post {
+                        Toast.makeText(this, if (ok) "Your voice was removed" else "Couldn't remove it from this clip", Toast.LENGTH_SHORT).show()
+                        load()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null).show()
     }
 
     private fun toggleFav(c: Clip) {

@@ -142,6 +142,7 @@ class ReplayService : Service() {
     private var screenOn = true
 
     private var audio: AudioCapture? = null
+    @Volatile private var mic: MicCapture? = null
     @Volatile private var saving = false
     private var screenReceiver: BroadcastReceiver? = null
 
@@ -422,7 +423,8 @@ class ReplayService : Service() {
                     Log.w(TAG, "audio unavailable", t)
                 }
             }
-            EventLog.add("started · helper=$helperMode · mode=${settings.screenMode.name}")
+            startMic()
+            EventLog.add("started · helper=$helperMode · mode=${settings.screenMode.name} · mic=${mic != null}")
             recording = true
             val pendingAction = afterStart
             afterStart = null
@@ -433,6 +435,20 @@ class ReplayService : Service() {
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
             main.post { fail("Couldn't start: ${t.message}") }
+        }
+    }
+
+    private fun startMic() {
+        if (!settings.mic || mic != null || !helperMode) return
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            EventLog.add("mic: no permission"); return
+        }
+        try {
+            val r = SampleRing.fileBacked(cacheDir, "mic", (96_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), (settings.seconds + 3) * 1_000_000L)
+            mic = MicCapture(r).also { it.start() }
+            EventLog.add("mic on")
+        } catch (t: Throwable) {
+            EventLog.add("mic failed: ${t.message}")
         }
     }
 
@@ -453,6 +469,7 @@ class ReplayService : Service() {
                 putString("mode", settings.screenMode.name)
                 putStringArray("launchers", launchers.toTypedArray())
                 putBoolean("audio", settings.audio)
+                putBoolean("voiceChat", settings.voiceChat)
                 putInt("appUid", android.os.Process.myUid())
             }
             if (cap.startRecording(cfg) < 0) {
@@ -478,6 +495,7 @@ class ReplayService : Service() {
                     diagnostics = "recording (helper): ${st["live"]} · ${st["layout"]} · ${st["codec"]}\n" +
                         "mode ${settings.screenMode.label} · game ${st["game"]}\n" +
                         "game audio: ${st["audio"]} (level ${st["level"]})${if (audio != null) " + app fallback" else ""}\n" +
+                        "mic: ${mic?.let { "on (level ${"%.4f".format(it.level)})" } ?: "off"} · voice chat: ${if (settings.voiceChat) "on" else "off"}\n" +
                         runCatching { cap.info() }.getOrDefault("")
                     if (st["state"] != "recording") {
                         EventLog.add("helper stopped recording (${st["err"]}), restarting it")
@@ -861,10 +879,10 @@ class ReplayService : Service() {
                     val values = ContentValues().apply {
                         put(MediaStore.Images.Media.DISPLAY_NAME, name)
                         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + CLIP_FOLDER)
+                        put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this, true))
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
-                    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    val uri = contentResolver.insert(ClipStore.saveTable(this, true), values)
                         ?: throw IllegalStateException("couldn't create file")
                     contentResolver.openOutputStream(uri)!!.use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                     values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
@@ -963,6 +981,18 @@ class ReplayService : Service() {
                 )
                 val base = try { cap.saveClip(pfd, seconds) } finally { runCatching { pfd.close() } }
                 if (base < 0) throw IllegalStateException("nothing recorded yet")
+                val m = mic
+                val mFmt = m?.format
+                if (m != null && mFmt != null) {
+                    val r = saveWithMic(tmp, m, mFmt, base)
+                    if (r != null) {
+                        id = r.first; len = r.second
+                        clipsPrefs.setHasMic(id, true)
+                        if (game != null) clipsPrefs.setGame(id, game)
+                        finishSave(id, len, null)
+                        return@execute
+                    }
+                }
                 val aud = if (aFmt != null && aRing != null) aRing.pinFrom(base, requireKey = false) else emptyList()
                 try {
                     val r = mergeToStore(tmp, aRing, aud, aFmt, base)
@@ -977,8 +1007,60 @@ class ReplayService : Service() {
                 tmp.delete()
                 saving = false
             }
-            EventLog.add(if (err == null) "saved ${len}s clip" else "save failed: $err")
-            if (err == null) feedback.onSaved(id, len) else feedback.onFailed(err)
+            finishSave(id, len, err)
+        }
+    }
+
+    private fun finishSave(id: Long, len: Int, err: String?) {
+        saving = false
+        EventLog.add(if (err == null) "saved ${len}s clip" else "save failed: $err")
+        if (err == null) feedback.onSaved(id, len) else feedback.onFailed(err)
+    }
+
+    /** Mixes the mic into the helper's clip. Returns (id, seconds) or null to fall back to no-mic. */
+    private fun saveWithMic(tmp: java.io.File, m: MicCapture, mFmt: MediaFormat, base: Long): Pair<Long, Int>? {
+        val ex = android.media.MediaExtractor().apply { setDataSource(tmp.absolutePath) }
+        var vT = -1
+        var aT = -1
+        for (t in 0 until ex.trackCount) {
+            val mime = ex.getTrackFormat(t).getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("video/") && vT < 0) vT = t
+            if (mime.startsWith("audio/") && aT < 0) aT = t
+        }
+        val durUs = runCatching { ex.getTrackFormat(vT).getLong(MediaFormat.KEY_DURATION) }.getOrDefault(0L)
+        ex.release()
+        if (vT < 0) return null
+        val samples = m.ring.pinFrom(base, requireKey = false)
+        try {
+            val micPcm = AudioMixer.decodeRing(mFmt, m.ring, samples, base) ?: return null
+            val gamePcm = if (aT >= 0) AudioMixer.decodeTrack(tmp, aT) else null
+            val lengthUs = if (durUs > 0) durUs else (micPcm.data.size / 2L) * 1_000_000L / 48_000
+            val (fmt, enc) = AudioMixer.mixAndEncode(gamePcm, micPcm, settings.micGain, lengthUs)
+            val name = "DualClip_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, name)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, false))
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(ClipStore.saveTable(this, false), values) ?: return null
+            return try {
+                val last = contentResolver.openFileDescriptor(uri, "rw")!!.use {
+                    AudioMixer.writeWithMic(tmp, vT, aT, fmt, enc, it.fileDescriptor)
+                }
+                values.clear(); values.put(MediaStore.Video.Media.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                ContentUris.parseId(uri) to (last / 1_000_000L).toInt()
+            } catch (t: Throwable) {
+                runCatching { contentResolver.delete(uri, null, null) }
+                EventLog.add("mic mix failed: ${t.message}")
+                null
+            }
+        } catch (t: Throwable) {
+            EventLog.add("mic mix failed: ${t.message}")
+            return null
+        } finally {
+            m.ring.unpin()
         }
     }
 
@@ -1006,10 +1088,10 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + CLIP_FOLDER)
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-        val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        val uri = contentResolver.insert(ClipStore.saveTable(this, false), values)
             ?: run { ex.release(); throw IllegalStateException("couldn't create file") }
         var lastUs = 0L
         try {
@@ -1075,10 +1157,10 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + CLIP_FOLDER)
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-        val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        val uri = contentResolver.insert(ClipStore.saveTable(this, false), values)
             ?: throw IllegalStateException("couldn't create file")
         try {
             contentResolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out, 1 shl 20) } }
@@ -1101,10 +1183,10 @@ class ReplayService : Service() {
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, name)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + CLIP_FOLDER)
+                put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this, true))
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            val uri = contentResolver.insert(ClipStore.saveTable(this, true), values)
             if (uri == null) { feedback.onFailed("couldn't create file"); return@execute }
             val ok = try {
                 contentResolver.openFileDescriptor(uri, "w")!!.use { cap.screenshot(it) }
@@ -1133,11 +1215,11 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + CLIP_FOLDER)
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = contentResolver
-        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        val uri = resolver.insert(ClipStore.saveTable(this, false), values)
             ?: throw IllegalStateException("couldn't create file")
         try {
             resolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
@@ -1212,6 +1294,9 @@ class ReplayService : Service() {
         screenReceiver = null
         val aud = audio
         audio = null
+        val m = mic
+        mic = null
+        runCatching { m?.stop() }
         glHandler.post {
             stopVideo()
             runCatching { projectionDisplay?.release() }
@@ -1279,7 +1364,11 @@ class ReplayService : Service() {
     private fun startInForeground() {
         val n = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && settings.mic &&
+                checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            ) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            startForeground(NOTIF_ID, n, type)
         } else {
             startForeground(NOTIF_ID, n)
         }

@@ -3,6 +3,7 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -80,6 +81,10 @@
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".ShizukuSetupActivity" android:exported="false" />
         <activity
+            android:name=".PickSoundActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
             android:name=".ProjectionRequestActivity"
             android:excludeFromRecents="true"
             android:exported="false"
@@ -102,7 +107,7 @@
         <service
             android:name=".ReplayService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|microphone" />
 
         <service
             android:name=".ClipAccessibilityService"
