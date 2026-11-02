@@ -29,6 +29,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("audio", true)
         set(v) = prefs.edit().putBoolean("audio", v).apply()
 
+    /** True while the user wants the buffer on, so it can come back if Android kills it. */
+    var wantRunning: Boolean
+        get() = prefs.getBoolean("want_running", false)
+        set(v) = prefs.edit().putBoolean("want_running", v).apply()
+
     var clipSound: Boolean
         get() = prefs.getBoolean("clip_sound", true)
         set(v) = prefs.edit().putBoolean("clip_sound", v).apply()

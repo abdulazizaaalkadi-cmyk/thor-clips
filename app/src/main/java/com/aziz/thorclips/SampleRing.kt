@@ -12,12 +12,35 @@ import java.nio.ByteBuffer
  * overwritten mid-save. If the ring fills up during a save, new samples are dropped
  * until the next keyframe instead (a tiny gap in the *next* clip, never a broken file).
  */
-class SampleRing(capacityBytes: Int, private val windowUs: Long) {
+class SampleRing(capacityBytes: Int, private val windowUs: Long, storage: ByteBuffer? = null) {
+
+    companion object {
+        private var generation = 0
+
+        /**
+         * A ring stored in a memory-mapped file instead of RAM. Android can flush those
+         * pages to storage under memory pressure instead of killing Dual Clips, which
+         * matters next to heavy emulators like Eden.
+         */
+        fun fileBacked(dir: java.io.File, name: String, capacityBytes: Int, windowUs: Long): SampleRing {
+            return try {
+                // Alternate files so a clip still being saved isn't overwritten by a rebuilt ring.
+                val f = java.io.File(dir, "ring_${name}_${(generation++) % 2}.bin")
+                val raf = java.io.RandomAccessFile(f, "rw")
+                raf.setLength(capacityBytes.toLong())
+                val map = raf.channel.map(java.nio.channels.FileChannel.MapMode.READ_WRITE, 0, capacityBytes.toLong())
+                raf.close() // the mapping stays valid after closing the file
+                SampleRing(capacityBytes, windowUs, map)
+            } catch (t: Throwable) {
+                SampleRing(capacityBytes, windowUs)
+            }
+        }
+    }
 
     class Sample(val offset: Int, val size: Int, val ptsUs: Long, val key: Boolean)
 
     private val cap = capacityBytes
-    private val data: ByteBuffer = ByteBuffer.allocateDirect(capacityBytes)
+    private val data: ByteBuffer = storage ?: ByteBuffer.allocateDirect(capacityBytes)
     private val samples = ArrayDeque<Sample>()
     private var head = 0
     private var used = 0

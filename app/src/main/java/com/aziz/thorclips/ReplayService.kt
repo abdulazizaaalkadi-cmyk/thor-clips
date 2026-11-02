@@ -158,13 +158,18 @@ class ReplayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> if (!running) start(intent)
+        if (intent == null) {
+            // Android restarted us after killing the process (usually for memory).
+            if (!running && settings.wantRunning) startAfterKill()
+            return START_STICKY
+        }
+        when (intent.action) {
+            ACTION_START -> if (!running) { settings.wantRunning = true; start(intent) }
             ACTION_SAVE -> requestSave()
-            ACTION_STOP -> shutdown()
+            ACTION_STOP -> { settings.wantRunning = false; shutdown() }
             ACTION_RESTORE_AUDIO -> restoreAudio(intent)
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onTrimMemory(level: Int) {
@@ -189,6 +194,29 @@ class ReplayService : Service() {
         saveExecutor.shutdown()
         feedback.release()
         super.onDestroy()
+    }
+
+    /**
+     * Restart without a new screen-capture prompt (nobody is there to tap it).
+     * With Shizuku, video doesn't need that permission; game audio waits for one tap.
+     */
+    private fun startAfterKill() {
+        EventLog.add("restarted after Android closed Dual Clips")
+        if (!shizukuReady()) {
+            EventLog.add("can't restart without Shizuku")
+            settings.wantRunning = false
+            stopSelf()
+            return
+        }
+        running = true
+        setStatus("Restarting…")
+        startInForeground()
+        launchers = findLaunchers()
+        useShizuku = true
+        boundShizuku = true
+        Shizuku.bindUserService(userServiceArgs, shizukuConnection)
+        main.postDelayed({ if (running && settings.audio) notifyAudioPaused() }, 3000)
+        toast("Dual Clips restarted after Android closed it")
     }
 
     private fun start(intent: Intent) {
@@ -315,7 +343,7 @@ class ReplayService : Service() {
             try {
                 runCatching { audio?.stop() }
                 val windowUs = (settings.seconds + 3) * 1_000_000L
-                val aRing = SampleRing((128_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), windowUs)
+                val aRing = SampleRing.fileBacked(cacheDir, "audio", (128_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), windowUs)
                 audio = AudioCapture(proj, aRing).also { it.start() }
                 EventLog.add("game audio restored")
                 main.post { toast("Game audio is back on") }
@@ -363,7 +391,7 @@ class ReplayService : Service() {
             ) {
                 try {
                     val windowUs = (settings.seconds + 3) * 1_000_000L
-                    val aRing = SampleRing((128_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), windowUs)
+                    val aRing = SampleRing.fileBacked(cacheDir, "audio", (128_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), windowUs)
                     audio = AudioCapture(projection!!, aRing).also { it.start() }
                 } catch (t: Throwable) {
                     Log.w(TAG, "audio unavailable", t)
@@ -407,7 +435,7 @@ class ReplayService : Service() {
         val input = enc.createInputSurface()
         val bitrate = if (codecMime == MediaFormat.MIMETYPE_VIDEO_HEVC) settings.bitrate else settings.bitrate * 3 / 2
         val windowUs = (settings.seconds + 3) * 1_000_000L
-        val ring = SampleRing((bitrate.toLong() / 8 * (settings.seconds + 3) * 5 / 4).toInt(), windowUs)
+        val ring = SampleRing.fileBacked(cacheDir, "video", (bitrate.toLong() / 8 * (settings.seconds + 3) * 5 / 4).toInt(), windowUs)
         ring.onNeedKeyframe = { encHandler.post { requestKeyframe() } }
         videoFormat = null
         videoRing = ring
