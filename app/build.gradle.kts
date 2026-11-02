@@ -38,6 +38,12 @@ android {
         }
     }
 
+    lint {
+        // Parts of the app run inside the Shizuku helper and use internal APIs on purpose.
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     buildFeatures {
         aidl = true
         buildConfig = true

@@ -35,7 +35,8 @@ class HelperAudio(private val ring: SampleRing, private val excludeUid: Int, pri
         private const val SHELL = "com.android.shell"
 
         /** Makes framework audio classes happy in a bare app_process (as scrcpy does). */
-        @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
+        // Runs in the shell-level helper, where these internals are reachable (lint can't know that).
+        @SuppressLint("PrivateApi", "DiscouragedPrivateApi", "BlockedPrivateApi", "SoonBlockedPrivateApi")
         fun prepareProcess(base: Context?) {
             try {
                 val at = Class.forName("android.app.ActivityThread")
