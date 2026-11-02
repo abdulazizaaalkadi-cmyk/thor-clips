@@ -40,6 +40,13 @@ class ClipsActivity : Activity() {
     private lateinit var grid: GridView
     private lateinit var empty: TextView
     private lateinit var filterButton: TextView
+    private lateinit var barHolder: LinearLayout
+
+    /** Selection mode: ids of the picked clips/screenshots. */
+    private var selecting = false
+    private val selected = LinkedHashSet<Long>()
+    private var countView: TextView? = null
+    private var allButton: TextView? = null
     private var lookKey = ""
 
     private val main = Handler(Looper.getMainLooper())
@@ -75,18 +82,9 @@ class ClipsActivity : Activity() {
         col.addView(ui.header("My Clips", R.drawable.ic_myclips) {
             startActivity(Intent(this, ClipsSettingsActivity::class.java))
         })
-        val bar = ui.row()
-        bar.addView(ui.text("A open · hold Y options · B back", 13f, dim = true)
-            .apply { setPadding(ui.dp(4), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
-        filterButton = ui.secondaryButton("Show: ${prefs.filter.label}") {
-            ui.choose("Show", LibraryFilter.values().map { it.label to it }, prefs.filter) {
-                prefs.filter = it
-                filterButton.text = "Show: ${it.label}"
-                load()
-            }
-        }.apply { textSize = 14f; setPadding(ui.dp(16), ui.dp(10), ui.dp(16), ui.dp(10)) }
-        bar.addView(filterButton)
-        col.addView(bar, ui.lp(top = 10))
+        barHolder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(barHolder, ui.lp(top = 10))
+        renderBar()
         empty = ui.text("Nothing here yet.\nStart the clip buffer in Dual Clips, then use your clip or screenshot combo while playing.", 16f, dim = true)
             .apply { setPadding(ui.dp(4), ui.dp(24), 0, 0); visibility = View.GONE }
         col.addView(empty)
@@ -103,8 +101,12 @@ class ClipsActivity : Activity() {
             clipToPadding = false
             setPadding(0, ui.dp(10), 0, ui.dp(24))
             adapter = this@ClipsActivity.adapter
-            setOnItemClickListener { _, _, pos, _ -> ClipStore.play(this@ClipsActivity, clips[pos]) }
-            setOnItemLongClickListener { _, _, pos, _ -> showMenu(clips[pos]); true }
+            setOnItemClickListener { _, _, pos, _ ->
+                if (selecting) toggle(clips[pos]) else ClipStore.play(this@ClipsActivity, clips[pos])
+            }
+            setOnItemLongClickListener { _, _, pos, _ ->
+                if (selecting) toggle(clips[pos]) else showMenu(clips[pos]); true
+            }
         }
         col.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
         return col
@@ -133,6 +135,7 @@ class ClipsActivity : Activity() {
     }
 
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_Y && selecting) return true
         if (keyCode == KeyEvent.KEYCODE_BUTTON_Y) {
             val pos = grid.selectedItemPosition
             if (pos in clips.indices) showMenu(clips[pos])
@@ -143,8 +146,133 @@ class ClipsActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BUTTON_Y) return true
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_B) { finish(); return true }
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            if (selecting) exitSelect() else finish()
+            return true
+        }
         return super.onKeyUp(keyCode, event)
+    }
+
+    // ------------------------------------------------------------------ select mode
+
+    private fun smallButton(label: String, onClick: () -> Unit) = ui.secondaryButton(label, onClick).apply {
+        textSize = 14f
+        setPadding(ui.dp(14), ui.dp(10), ui.dp(14), ui.dp(10))
+    }
+
+    private fun renderBar() {
+        barHolder.removeAllViews()
+        val row = ui.row()
+        if (!selecting) {
+            row.addView(ui.text("A open · hold Y options · B back", 13f, dim = true)
+                .apply { setPadding(ui.dp(4), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(smallButton("Select") { enterSelect() }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.dp(8) })
+            filterButton = smallButton("Show: ${prefs.filter.label}") {
+                ui.choose("Show", LibraryFilter.values().map { it.label to it }, prefs.filter) {
+                    prefs.filter = it
+                    filterButton.text = "Show: ${it.label}"
+                    load()
+                }
+            }
+            row.addView(filterButton)
+            barHolder.addView(row)
+            return
+        }
+        countView = ui.text("", 16f, bold = true).apply { setPadding(ui.dp(4), 0, ui.dp(8), 0) }
+        row.addView(countView, LinearLayout.LayoutParams(0, -2, 1f))
+        allButton = smallButton("Select all") {
+            if (selected.size == clips.size) selected.clear() else clips.forEach { selected += it.id }
+            updateSelection()
+        }
+        row.addView(allButton, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.dp(8) })
+        row.addView(smallButton("Done") { exitSelect() })
+        barHolder.addView(row)
+
+        val actions = ui.row()
+        val lp = { LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = ui.dp(8) } }
+        actions.addView(smallButton("Share") { pickedOrToast()?.let { ClipStore.shareMany(this, it) } }, lp())
+        actions.addView(smallButton("Export to SD card") { pickedOrToast()?.let { exportSd(it) } }, lp())
+        actions.addView(smallButton("Delete") { pickedOrToast()?.let { deletePicked(it) } },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        barHolder.addView(actions, ui.lp(top = 8))
+        updateSelection()
+    }
+
+    private fun enterSelect() {
+        selecting = true
+        selected.clear()
+        renderBar()
+        adapter.notifyDataSetChanged()
+        grid.requestFocus()
+    }
+
+    private fun exitSelect() {
+        selecting = false
+        selected.clear()
+        renderBar()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun toggle(c: Clip) {
+        if (!selected.add(c.id)) selected.remove(c.id)
+        updateSelection()
+    }
+
+    private fun updateSelection() {
+        countView?.text = if (selected.isEmpty()) "Pick clips (A)" else "${selected.size} selected"
+        allButton?.text = if (clips.isNotEmpty() && selected.size == clips.size) "Deselect all" else "Select all"
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun pickedOrToast(): List<Clip>? {
+        val list = clips.filter { it.id in selected }
+        if (list.isEmpty()) { Toast.makeText(this, "Select something first", Toast.LENGTH_SHORT).show(); return null }
+        return list
+    }
+
+    private fun deletePicked(list: List<Clip>) {
+        ui.dialog().setTitle("Delete ${list.size} item${if (list.size == 1) "" else "s"}?")
+            .setMessage("This can't be undone.")
+            .setPositiveButton("Delete") { _, _ ->
+                ClipStore.deleteMany(this, list, REQ_DELETE)
+                exitSelect(); load()
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun exportSd(list: List<Clip>) {
+        val vol = ClipStore.sdCardVolume(this)
+        if (vol == null) {
+            ui.dialog().setTitle("No SD card found")
+                .setMessage("Insert an SD card (and make sure it's set up as portable storage), then try again.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        val n = list.size
+        ui.dialog().setTitle("Export $n item${if (n == 1) "" else "s"} to ${vol.second}")
+            .setMessage("They'll go to ${vol.second} › ${ClipStore.EXPORT_FOLDER}.\n\nCopy keeps them here too. Move frees up space on the Thor.")
+            .setPositiveButton("Copy") { _, _ -> runExport(vol.first, list, move = false) }
+            .setNeutralButton("Move") { _, _ -> runExport(vol.first, list, move = true) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun runExport(volume: String, list: List<Clip>, move: Boolean) {
+        val progressText = ui.text("Preparing…", 16f).apply { setPadding(ui.dp(24), ui.dp(16), ui.dp(24), ui.dp(8)) }
+        val dlg = ui.dialog().setTitle(if (move) "Moving to SD card" else "Copying to SD card")
+            .setView(progressText).setCancelable(false).show()
+        Executors.newSingleThreadExecutor().execute {
+            val (ok, bad) = ClipStore.exportToSd(this, volume, list, move) { i ->
+                main.post { progressText.text = "${minOf(i + 1, list.size)} of ${list.size}" }
+            }
+            main.post {
+                runCatching { dlg.dismiss() }
+                val msg = if (bad == 0) "${if (move) "Moved" else "Copied"} $ok to SD card › ${ClipStore.EXPORT_FOLDER}"
+                else "$ok done, $bad failed (is the SD card full?)"
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                exitSelect()
+                load()
+            }
+        }
     }
 
     // ------------------------------------------------------------------ hold-Y menu
@@ -156,6 +284,7 @@ class ClipsActivity : Activity() {
             "Open in editor" to { openEditor(c) },
             if (c.isImage) null else ("Trim" to { startActivity(Intent(this, TrimActivity::class.java).putExtra("id", c.id)) }),
             "Share" to { ClipStore.share(this, c) },
+            "Export to SD card" to { exportSd(listOf(c)) },
             (if (fav) "Unfavourite" else "Favourite") to { toggleFav(c) },
             "Info" to { showInfo(c) },
             "Delete" to { confirmDelete(c) },
@@ -284,7 +413,9 @@ class ClipsActivity : Activity() {
         fun bind(c: Clip) {
             boundId = c.id
             val fav = c.id.toString() in prefs.favourites
-            title.text = (if (fav) "★ " else "") + (if (c.isImage) "▣ " else "") + ClipStore.title(c)
+            val check = if (selecting) (if (c.id in selected) "☑ " else "☐ ") else ""
+            title.text = check + (if (fav) "★ " else "") + (if (c.isImage) "▣ " else "") + ClipStore.title(c)
+            root.alpha = if (selecting && c.id !in selected) 0.75f else 1f
             meta.text = ClipStore.meta(this@ClipsActivity, c)
             if (!prefs.previews) return
             val cached = thumbs.get(c.id)

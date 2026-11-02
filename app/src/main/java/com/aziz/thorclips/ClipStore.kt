@@ -118,6 +118,89 @@ object ClipStore {
         a.startActivity(Intent.createChooser(i, if (c.isImage) "Share screenshot" else "Share clip"))
     }
 
+    fun shareMany(a: Activity, list: List<Clip>) {
+        if (list.isEmpty()) return
+        if (list.size == 1) { share(a, list[0]); return }
+        val type = when {
+            list.all { it.isImage } -> "image/*"
+            list.none { it.isImage } -> "video/*"
+            else -> "*/*"
+        }
+        val i = Intent(Intent.ACTION_SEND_MULTIPLE).setType(type)
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(list.map { it.uri }))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        a.startActivity(Intent.createChooser(i, "Share ${list.size} items"))
+    }
+
+    /** Deletes what it can directly; anything else goes to Android's confirm prompt. Returns how many were deleted now. */
+    fun deleteMany(a: Activity, list: List<Clip>, requestCode: Int): Int {
+        var done = 0
+        val needAsk = ArrayList<Uri>()
+        for (c in list) {
+            try {
+                if (a.contentResolver.delete(c.uri, null, null) > 0) done++
+            } catch (e: SecurityException) {
+                needAsk += c.uri
+            }
+        }
+        if (needAsk.isNotEmpty()) {
+            val pi = MediaStore.createDeleteRequest(a.contentResolver, needAsk)
+            a.startIntentSenderForResult(pi.intentSender, requestCode, null, 0, 0, 0)
+        }
+        return done
+    }
+
+    // ---------------------------------------------------------------- SD card export
+
+    const val EXPORT_FOLDER = "DCIM/DualClips"
+
+    /** The MediaStore name of a mounted SD card, or null if there isn't one. */
+    fun sdCardVolume(ctx: Context): Pair<String, String>? {
+        val sm = ctx.getSystemService(android.os.storage.StorageManager::class.java) ?: return null
+        val v = sm.storageVolumes.firstOrNull {
+            it.isRemovable && it.state == Environment.MEDIA_MOUNTED
+        } ?: return null
+        val name = v.mediaStoreVolumeName ?: return null
+        return name to v.getDescription(ctx)
+    }
+
+    /**
+     * Copies (or moves) clips and screenshots to SD card → DCIM/DualClips.
+     * Returns (exported, failed).
+     */
+    fun exportToSd(ctx: Context, volume: String, list: List<Clip>, move: Boolean, progress: (Int) -> Unit): Pair<Int, Int> {
+        var ok = 0
+        var bad = 0
+        val r = ctx.contentResolver
+        for ((i, c) in list.withIndex()) {
+            progress(i)
+            val table = if (c.isImage) MediaStore.Images.Media.getContentUri(volume) else MediaStore.Video.Media.getContentUri(volume)
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, c.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, c.mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, EXPORT_FOLDER)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            var dest: Uri? = null
+            try {
+                dest = r.insert(table, values) ?: throw IllegalStateException("couldn't create file on SD card")
+                r.openInputStream(c.uri)!!.use { input ->
+                    r.openOutputStream(dest)!!.use { out -> input.copyTo(out, 1 shl 20) }
+                }
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                r.update(dest, values, null, null)
+                if (move) runCatching { r.delete(c.uri, null, null) }
+                ok++
+            } catch (t: Throwable) {
+                dest?.let { runCatching { r.delete(it, null, null) } }
+                bad++
+            }
+        }
+        progress(list.size)
+        return ok to bad
+    }
+
     fun play(a: Activity, c: Clip) {
         val i = Intent(Intent.ACTION_VIEW).setDataAndType(c.uri, c.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
