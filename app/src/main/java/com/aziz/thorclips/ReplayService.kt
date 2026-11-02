@@ -879,7 +879,7 @@ class ReplayService : Service() {
                     val values = ContentValues().apply {
                         put(MediaStore.Images.Media.DISPLAY_NAME, name)
                         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                        put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this, true))
+                        put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, true))
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
                     val uri = contentResolver.insert(ClipStore.saveTable(this, true), values)
@@ -1088,7 +1088,7 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = contentResolver.insert(ClipStore.saveTable(this, false), values)
@@ -1157,7 +1157,7 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = contentResolver.insert(ClipStore.saveTable(this, false), values)
@@ -1183,7 +1183,7 @@ class ReplayService : Service() {
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, name)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this, true))
+                put(MediaStore.Images.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, true))
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val uri = contentResolver.insert(ClipStore.saveTable(this, true), values)
@@ -1215,7 +1215,7 @@ class ReplayService : Service() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this, false))
+            put(MediaStore.Video.Media.RELATIVE_PATH, ClipStore.relativePath(this@ReplayService, false))
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = contentResolver
