@@ -15,6 +15,11 @@ class ClipAccessibilityService : AccessibilityService() {
     private var r3 = false
     private var fired = false
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        EventLog.init(this)
+    }
+
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val down = event.action == KeyEvent.ACTION_DOWN
         when (event.keyCode) {
@@ -27,7 +32,10 @@ class ClipAccessibilityService : AccessibilityService() {
             EventLog.add("L3+R3 pressed (device ${event.deviceId})")
             val svc = ReplayService.instance
             if (svc != null) svc.requestSave()
-            else Toast.makeText(this, "Dual Clips: buffer is off", Toast.LENGTH_SHORT).show()
+            else {
+                EventLog.add("L3+R3 but buffer is off")
+                Toast.makeText(this, "Dual Clips: buffer is off", Toast.LENGTH_SHORT).show()
+            }
         }
         if (!l3 && !r3) fired = false
         return false

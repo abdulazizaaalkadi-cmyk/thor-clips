@@ -152,6 +152,7 @@ class ReplayService : Service() {
         settings = Settings(this)
         clipsPrefs = ClipsPrefs(this)
         feedback = ClipFeedback(this)
+        EventLog.init(this)
         instance = this
     }
 
@@ -164,7 +165,18 @@ class ReplayService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) EventLog.add("Android is low on memory (level $level)")
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        EventLog.add("app swiped away (buffer keeps running)")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        EventLog.add("service destroyed (running=$running)")
         if (running) teardown()
         instance = null
         recording = false
@@ -193,7 +205,7 @@ class ReplayService : Service() {
         projection = mpm.getMediaProjection(code, data)?.also {
             it.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
-                    main.post { if (running) shutdown() }
+                    main.post { onProjectionStopped() }
                 }
             }, main)
         }
@@ -212,6 +224,7 @@ class ReplayService : Service() {
 
     private val shizukuConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            EventLog.add("Shizuku helper connected")
             if (binder == null || !binder.pingBinder()) {
                 useShizuku = false
                 glHandler.post { startAll() }
@@ -222,6 +235,7 @@ class ReplayService : Service() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            EventLog.add("Shizuku helper disconnected")
             capture = null
             if (running) {
                 // Shizuku died (Wi-Fi/ADB dropped). Carry on with the top screen only.
@@ -232,6 +246,25 @@ class ReplayService : Service() {
                     main.post { toast("Shizuku stopped — recording top screen only") }
                 }
             }
+        }
+    }
+
+    /**
+     * Android can end the screen-capture permission on its own (e.g. when a game takes
+     * over the second screen). With Shizuku that only affects game audio, so keep going.
+     */
+    private fun onProjectionStopped() {
+        if (!running) return
+        EventLog.add("Android ended the screen-capture permission")
+        projection = null
+        if (useShizuku && capture != null) {
+            val a = audio
+            audio = null
+            glHandler.post { runCatching { a?.stop() } }
+            EventLog.add("still recording video via Shizuku (game audio paused)")
+            toast("Dual Clips: still recording (game audio off until restart)")
+        } else {
+            fail("Android stopped screen capture")
         }
     }
 
@@ -454,7 +487,7 @@ class ReplayService : Service() {
             if (codec !== encoder) return
             EventLog.add("encoder error: ${e.diagnosticInfo} transient=${e.isTransient}")
             Log.e(TAG, "encoder error", e)
-            main.post { fail("Video encoder error: ${e.diagnosticInfo}") }
+            if (!e.isTransient) glHandler.post { recoverVideo("encoder error") }
         }
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
@@ -543,10 +576,34 @@ class ReplayService : Service() {
                 val label = when (want) { Live.BOTH -> "both screens"; Live.TOP -> "top screen"; Live.BOTTOM -> "bottom screen" }
                 main.post { toast("Dual Clips: now recording $label") }
             } catch (e: Throwable) {
-                EventLog.add("switch failed: ${e.message}")
-                main.post { fail("Couldn't switch screens: ${e.message}") }
+                EventLog.add("switch to ${want.name} failed: ${e.message}")
+                recoverVideo("switch failed")
             }
         }
+    }
+
+    private var recoveries = 0
+
+    /** GL thread: rebuild the video side (same screens, then top only) instead of giving up. */
+    private fun recoverVideo(why: String) {
+        if (!running) return
+        if (++recoveries > 6) {
+            main.post { fail("Recording kept failing ($why). Check Diagnostics.") }
+            return
+        }
+        val previous = live ?: Live.TOP
+        stopVideo()
+        for (mode in listOf(previous, Live.TOP).distinct()) {
+            try {
+                startVideo(mode)
+                EventLog.add("recovered after $why → ${mode.name}")
+                return
+            } catch (t: Throwable) {
+                EventLog.add("recover ${mode.name} failed: ${t.message}")
+                stopVideo()
+            }
+        }
+        main.post { fail("Couldn't restart recording after $why") }
     }
 
     /** React straight away when a screen is put to sleep or woken. */

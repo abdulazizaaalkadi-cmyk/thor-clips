@@ -48,6 +48,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        EventLog.init(this)
         settings = Settings(this)
         Shizuku.addRequestPermissionResultListener(shizukuResult)
         Shizuku.addBinderReceivedListenerSticky(shizukuBinder)

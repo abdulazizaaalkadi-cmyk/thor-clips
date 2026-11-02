@@ -18,6 +18,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        EventLog.init(this)
         s = Settings(this)
         build()
     }
