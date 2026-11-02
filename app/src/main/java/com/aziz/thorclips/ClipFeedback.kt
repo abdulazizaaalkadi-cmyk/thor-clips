@@ -74,15 +74,31 @@ class ClipFeedback(private val ctx: Context) {
             val want = pending
             if (want != null && want.first == id) { pending = null; p.play(id, want.second, want.second, 1, 0, 1f) }
         }
-        val custom = PickSoundActivity.file(ctx)
         ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) } +
-            ("shutter" to pool.load(ctx, R.raw.snd_shutter, 1)) +
-            (if (custom.exists()) mapOf("custom" to pool.load(custom.absolutePath, 1)) else emptyMap())
+            ("shutter" to pool.load(ctx, R.raw.snd_shutter, 1))
+    }
+
+    // Your own sound is loaded on demand, and reloaded whenever the file changes,
+    // so it works even if you uploaded it after this screen / the buffer started.
+    private var customId = 0
+    private var customStamp = -1L
+
+    private fun customSoundId(): Int? {
+        val f = PickSoundActivity.file(ctx)
+        if (!f.exists()) return null
+        val stamp = f.lastModified() xor f.length()
+        if (stamp != customStamp || customId == 0) {
+            if (customId != 0) runCatching { pool.unload(customId) }
+            synchronized(loaded) { loaded.remove(customId) }
+            customId = pool.load(f.absolutePath, 1)
+            customStamp = stamp
+        }
+        return customId
     }
 
     /** Plays one of the clip sounds (also used for previews in settings). */
     fun playSound(key: String = settings.clipSoundName, volume: Float = settings.clipVolume) {
-        val id = ids[key] ?: ids["soft"] ?: return
+        val id = (if (key == "custom") customSoundId() else ids[key]) ?: ids["soft"] ?: return
         val ready = synchronized(loaded) { id in loaded }
         val stream = if (ready) pool.play(id, volume, volume, 1, 0, 1f) else 0
         if (stream == 0) pending = id to volume // not loaded yet: play as soon as it is

@@ -30,7 +30,6 @@ object ClipAlertRows {
                     when (key) {
                         "off" -> {}
                         "upload" -> a.startActivity(Intent(a, PickSoundActivity::class.java))
-                        "custom" -> ClipFeedback(a).let { f -> f.playSound("custom", s.clipVolume) }
                         else -> feedback.playSound(key, s.clipVolume)
                     }
                 },
