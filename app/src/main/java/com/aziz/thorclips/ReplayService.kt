@@ -283,7 +283,9 @@ class ReplayService : Service() {
             registerScreenReceiver()
             if (useShizuku && settings.screenMode == ScreenMode.AUTO && bottomId != null) {
                 detectHandler.postDelayed(detectTask, 1500)
+                getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, detectHandler)
             }
+            EventLog.add("started · shizuku=${useShizuku} · mode=${settings.screenMode.name} · top=$topId bottom=${bottomId ?: "-"}")
             recording = true
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
@@ -341,6 +343,7 @@ class ReplayService : Service() {
         live = actual
 
         val diag = StringBuilder()
+        if (lastSnapshotSummary.isNotEmpty()) diag.append("windows:\n").append(lastSnapshotSummary).append('\n')
         getSystemService(DisplayManager::class.java).displays.forEach { d ->
             val p = Point(); @Suppress("DEPRECATION") d.getRealSize(p)
             diag.append("display ${d.displayId} \"${d.name}\" ${p.x}x${p.y}\n")
@@ -349,6 +352,7 @@ class ReplayService : Service() {
         diag.append("shizuku: ${if (useShizuku) "on" else "off (top screen only)"} · mode ${settings.screenMode.label}\n")
         cap?.let { diag.append(runCatching { it.info() }.getOrDefault("")) }
         diagnostics = diag.toString()
+        EventLog.add("recording ${actual.name} ${layout.outW}x${layout.outH} $codecMime")
 
         main.post {
             setStatus(statusText())
@@ -448,6 +452,7 @@ class ReplayService : Service() {
 
         override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
             if (codec !== encoder) return
+            EventLog.add("encoder error: ${e.diagnosticInfo} transient=${e.isTransient}")
             Log.e(TAG, "encoder error", e)
             main.post { fail("Video encoder error: ${e.diagnosticInfo}") }
         }
@@ -477,41 +482,80 @@ class ReplayService : Service() {
         }
     }
 
-    /** Detect thread: which screen(s) is a game showing on? Switch after two matching readings. */
-    private fun detectOnce() {
-        val cap = capture ?: return
-        val bId = bottomId ?: return
-        val snap = cap.windowSnapshot()
-        if (snap.isBlank()) return
-        val appTypes = setOf("BASE_APPLICATION", "APPLICATION", "PRESENTATION", "PRIVATE_PRESENTATION", "?")
-        fun gameOn(display: Int): String? = snap.lineSequence()
-            .map { it.split('|') }
-            .filter { it.size >= 3 && it[0].toIntOrNull() == display && it[2] in appTypes }
-            .map { it[1] }
-            .firstOrNull { it !in launchers }
+    @Volatile private var lastSnapshotSummary = ""
+    private var lastReading = ""
 
-        val t = gameOn(topId)
-        val b = gameOn(bId)
-        val want = when {
+    private fun displayAwake(id: Int): Boolean {
+        val st = getSystemService(DisplayManager::class.java).getDisplay(id)?.state ?: return false
+        return st == Display.STATE_ON || st == Display.STATE_VR
+    }
+
+    /**
+     * Detect thread: which screen(s) should be recorded?
+     *  1. A screen that's asleep is never recorded (switches straight away).
+     *  2. Otherwise, record the screen(s) that show a game (needs two matching readings).
+     */
+    private fun detectOnce(immediate: Boolean = false) {
+        val bId = bottomId ?: return
+        val topAwake = displayAwake(topId)
+        val botAwake = displayAwake(bId)
+
+        var t: String? = null
+        var b: String? = null
+        val cap = capture
+        if (cap != null) {
+            val snap = runCatching { cap.windowSnapshot() }.getOrDefault("")
+            val appTypes = setOf("BASE_APPLICATION", "APPLICATION", "PRESENTATION", "PRIVATE_PRESENTATION", "?")
+            fun gameOn(display: Int): String? = snap.lineSequence()
+                .map { it.split('|') }
+                .filter { it.size >= 3 && it[0].toIntOrNull() == display && it[2] in appTypes }
+                .map { it[1] }
+                .firstOrNull { it !in launchers }
+            t = gameOn(topId)
+            b = gameOn(bId)
+            lastSnapshotSummary = snap.lineSequence().filter { it.isNotBlank() }.take(12).joinToString("\n")
+        }
+
+        val want: Live? = when {
+            !topAwake && !botAwake -> null              // device asleep: keep as is
+            topAwake && !botAwake -> Live.TOP           // bottom screen resting
+            !topAwake && botAwake -> Live.BOTTOM        // top screen resting
             t != null && b != null -> Live.BOTH
             t != null -> Live.TOP
             b != null -> Live.BOTTOM
-            else -> null
-        } ?: return
-        lastGame = t ?: b
+            else -> null                                // no game found: keep as is
+        }
+        val reading = "awake top=$topAwake bottom=$botAwake · game top=${t ?: "-"} bottom=${b ?: "-"} → ${want ?: "keep"}"
+        if (reading != lastReading) { EventLog.add("detect: $reading"); lastReading = reading }
+        if (t != null || b != null) lastGame = t ?: b
+        if (want == null) return
 
+        val sleepChange = !topAwake || !botAwake
         if (want == live) { pendingLive = null; return }
-        if (pendingLive != want) { pendingLive = want; return }
+        if (!immediate && !sleepChange && pendingLive != want) { pendingLive = want; return }
         pendingLive = null
         glHandler.post {
             if (!running || live == want) return@post
+            EventLog.add("switching ${live?.name} → ${want.name}")
             stopVideo()
             try {
                 startVideo(want)
                 val label = when (want) { Live.BOTH -> "both screens"; Live.TOP -> "top screen"; Live.BOTTOM -> "bottom screen" }
                 main.post { toast("Dual Clips: now recording $label") }
             } catch (e: Throwable) {
+                EventLog.add("switch failed: ${e.message}")
                 main.post { fail("Couldn't switch screens: ${e.message}") }
+            }
+        }
+    }
+
+    /** React straight away when a screen is put to sleep or woken. */
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == topId || displayId == bottomId) {
+                detectHandler.postDelayed({ if (running) runCatching { detectOnce(immediate = true) } }, 300)
             }
         }
     }
@@ -520,8 +564,22 @@ class ReplayService : Service() {
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
                 when (i?.action) {
-                    Intent.ACTION_SCREEN_OFF -> glHandler.post { setSuspended(true) }
-                    Intent.ACTION_SCREEN_ON -> glHandler.post { setSuspended(false) }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        // On the Thor the top screen can sleep while the bottom keeps playing.
+                        val bId = bottomId
+                        if (useShizuku && bId != null && displayAwake(bId)) {
+                            EventLog.add("top screen asleep, bottom still on")
+                            detectHandler.post { runCatching { detectOnce(immediate = true) } }
+                        } else {
+                            EventLog.add("screens off: paused")
+                            glHandler.post { setSuspended(true) }
+                        }
+                    }
+                    Intent.ACTION_SCREEN_ON -> {
+                        EventLog.add("screen on")
+                        glHandler.post { setSuspended(false) }
+                        detectHandler.post { runCatching { detectOnce(immediate = true) } }
+                    }
                 }
             }
         }
@@ -554,7 +612,8 @@ class ReplayService : Service() {
         val ring = videoRing
         val vFmt = videoFormat
         if (!running || ring == null || vFmt == null) {
-            toast("Clip buffer isn't running")
+            EventLog.add("save refused: running=$running ring=${ring != null} format=${vFmt != null} live=${live?.name}")
+            feedback.onFailed(if (running) "still starting, try again in a second" else "clip buffer is off")
             return
         }
         if (saving) {
@@ -570,7 +629,8 @@ class ReplayService : Service() {
         if (video.isEmpty()) {
             ring.unpin()
             saving = false
-            toast("Nothing recorded yet")
+            EventLog.add("save: buffer empty (live=${live?.name})")
+            feedback.onFailed("nothing recorded yet")
             return
         }
         val base = video.first().ptsUs
@@ -597,6 +657,7 @@ class ReplayService : Service() {
                 saving = false
             }
             val len = ((video.last().ptsUs - base) / 1_000_000L).toInt()
+            EventLog.add(if (ok) "saved ${len}s clip (${live?.name})" else "save failed: $err")
             if (ok) feedback.onSaved(id, len) else feedback.onFailed(err ?: "unknown error")
         }
     }
@@ -671,6 +732,7 @@ class ReplayService : Service() {
 
     private fun fail(msg: String) {
         Log.w(TAG, msg)
+        EventLog.add("ERROR: $msg")
         toast(msg)
         if (running) teardown()
         setStatus("Error: $msg")
@@ -682,6 +744,8 @@ class ReplayService : Service() {
         running = false
         recording = false
         detectHandler.removeCallbacksAndMessages(null)
+        runCatching { getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener) }
+        EventLog.add("stopped")
         screenReceiver?.let { runCatching { unregisterReceiver(it) } }
         screenReceiver = null
         val aud = audio

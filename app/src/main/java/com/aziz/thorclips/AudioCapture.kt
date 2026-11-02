@@ -33,6 +33,7 @@ class AudioCapture(private val projection: MediaProjection, val ring: SampleRing
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            .excludeUid(Process.myUid()) // don't record Dual Clips' own chime
             .build()
         val pcm = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)

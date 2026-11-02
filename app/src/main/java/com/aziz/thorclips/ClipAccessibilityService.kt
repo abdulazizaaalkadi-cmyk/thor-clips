@@ -24,6 +24,7 @@ class ClipAccessibilityService : AccessibilityService() {
         }
         if (l3 && r3 && !fired) {
             fired = true
+            EventLog.add("L3+R3 pressed (device ${event.deviceId})")
             val svc = ReplayService.instance
             if (svc != null) svc.requestSave()
             else Toast.makeText(this, "Dual Clips: buffer is off", Toast.LENGTH_SHORT).show()

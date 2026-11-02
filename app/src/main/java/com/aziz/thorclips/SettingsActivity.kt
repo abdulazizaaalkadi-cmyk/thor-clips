@@ -81,9 +81,17 @@ class SettingsActivity : Activity() {
         col.addView(ui.section("About"))
         col.addView(ui.settingRow("Version", { BuildConfig.VERSION_NAME }) { _ -> })
         col.addView(ui.settingRow("Diagnostics", { "Show" }) { _ ->
+            val text = "Dual Clips ${BuildConfig.VERSION_NAME} · Android ${android.os.Build.VERSION.RELEASE}\n\n" +
+                ReplayService.diagnostics.ifEmpty { "(clip buffer not started)\n" } +
+                "\n--- log ---\n" + EventLog.text().ifEmpty { "(empty)" }
             ui.dialog().setTitle("Diagnostics")
-                .setMessage(ReplayService.diagnostics.ifEmpty { "Start the clip buffer first." })
-                .setPositiveButton("OK", null).show()
+                .setMessage(text)
+                .setPositiveButton("Copy") { _, _ ->
+                    val cm = getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Dual Clips diagnostics", text))
+                    Toast.makeText(this, "Copied, paste it to Claude", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("Close", null).show()
         })
 
         setContentView(ScrollView(this).apply { addView(col) })

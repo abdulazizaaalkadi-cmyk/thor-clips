@@ -52,32 +52,37 @@ class ClipFeedback(private val ctx: Context) {
     private val main = Handler(Looper.getMainLooper())
     private var popup: View? = null
 
+    // Uses the media/game volume (the one you hear games at). Dual Clips' own uid is
+    // excluded from clip audio, so the chime isn't recorded into your clips.
     private val pool: SoundPool = SoundPool.Builder()
         .setMaxStreams(2)
         .setAudioAttributes(
             AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_GAME)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
         ).build()
-    private val ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) }
     private val loaded = HashSet<Int>()
-    private var pending: Pair<Int, Float>? = null
+    @Volatile private var pending: Pair<Int, Float>? = null
+    private val ids: Map<String, Int>
 
     init {
+        // The listener must be attached BEFORE loading, or fast loads are missed and nothing plays.
         pool.setOnLoadCompleteListener { p, id, status ->
             if (status != 0) return@setOnLoadCompleteListener
             synchronized(loaded) { loaded += id }
             val want = pending
             if (want != null && want.first == id) { pending = null; p.play(id, want.second, want.second, 1, 0, 1f) }
         }
+        ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) }
     }
 
     /** Plays one of the clip sounds (also used for previews in settings). */
     fun playSound(key: String = settings.clipSoundName, volume: Float = settings.clipVolume) {
         val id = ids[key] ?: ids["soft"] ?: return
         val ready = synchronized(loaded) { id in loaded }
-        if (ready) pool.play(id, volume, volume, 1, 0, 1f) else pending = id to volume
+        val stream = if (ready) pool.play(id, volume, volume, 1, 0, 1f) else 0
+        if (stream == 0) pending = id to volume // not loaded yet: play as soon as it is
     }
 
     fun release() {
