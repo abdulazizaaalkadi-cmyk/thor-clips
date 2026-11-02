@@ -409,7 +409,9 @@ class ReplayService : Service() {
                 registerScreenReceiver()
             }
 
-            if (settings.audio && projection != null && audio == null &&
+            val helperAudioOn = helperMode && capture?.let { parseStatus(it.recorderStatus())["audio"] } == "on"
+            if (helperAudioOn) EventLog.add("game audio: recorded by the helper")
+            if (!helperAudioOn && settings.audio && projection != null && audio == null &&
                 checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             ) {
                 try {
@@ -450,6 +452,8 @@ class ReplayService : Service() {
                 putInt("seconds", settings.seconds)
                 putString("mode", settings.screenMode.name)
                 putStringArray("launchers", launchers.toTypedArray())
+                putBoolean("audio", settings.audio)
+                putInt("appUid", android.os.Process.myUid())
             }
             if (cap.startRecording(cfg) < 0) {
                 throw IllegalStateException("helper couldn't start: " + parseStatus(cap.recorderStatus())["err"])
@@ -472,7 +476,9 @@ class ReplayService : Service() {
                     st["game"]?.takeIf { it.isNotEmpty() }?.let { lastGame = it }
                     cap.takeLog().lineSequence().filter { it.isNotBlank() }.forEach { EventLog.add(it) }
                     diagnostics = "recording (helper): ${st["live"]} · ${st["layout"]} · ${st["codec"]}\n" +
-                        "mode ${settings.screenMode.label} · game ${st["game"]}\n" + runCatching { cap.info() }.getOrDefault("")
+                        "mode ${settings.screenMode.label} · game ${st["game"]}\n" +
+                        "game audio: ${st["audio"]} (level ${st["level"]})${if (audio != null) " + app fallback" else ""}\n" +
+                        runCatching { cap.info() }.getOrDefault("")
                     if (st["state"] != "recording") {
                         EventLog.add("helper stopped recording (${st["err"]}), restarting it")
                         runCatching { startHelper(cap) }.onFailure { EventLog.add("restart failed: ${it.message}") }
@@ -983,10 +989,18 @@ class ReplayService : Service() {
         val ex = android.media.MediaExtractor()
         ex.setDataSource(videoFile.absolutePath)
         var vTrackIn = -1
+        var aTrackIn = -1
         for (t in 0 until ex.trackCount) {
-            if (ex.getTrackFormat(t).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) { vTrackIn = t; break }
+            val mime = ex.getTrackFormat(t).getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("video/") && vTrackIn < 0) vTrackIn = t
+            if (mime.startsWith("audio/") && aTrackIn < 0) aTrackIn = t
         }
         if (vTrackIn < 0) { ex.release(); throw IllegalStateException("no video in clip") }
+        if (aTrackIn >= 0) {
+            // The helper already recorded game audio: just copy its file as-is.
+            ex.release()
+            return copyToStore(videoFile)
+        }
         ex.selectTrack(vTrackIn)
         val name = "DualClip_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
         val values = ContentValues().apply {
@@ -1043,6 +1057,34 @@ class ReplayService : Service() {
             values.put(MediaStore.Video.Media.IS_PENDING, 0)
             contentResolver.update(uri, values, null, null)
             return ContentUris.parseId(uri) to (lastUs / 1_000_000L).toInt()
+        } catch (t: Throwable) {
+            runCatching { contentResolver.delete(uri, null, null) }
+            throw t
+        }
+    }
+
+    /** Puts a finished MP4 into Movies/DualClips. Returns (id, seconds). */
+    private fun copyToStore(file: java.io.File): Pair<Long, Int> {
+        val mmr = android.media.MediaMetadataRetriever()
+        val secs = runCatching {
+            mmr.setDataSource(file.absolutePath)
+            (mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L) / 1000
+        }.getOrDefault(0L).toInt()
+        runCatching { mmr.release() }
+        val name = "DualClip_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + CLIP_FOLDER)
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("couldn't create file")
+        try {
+            contentResolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out, 1 shl 20) } }
+            values.clear(); values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            return ContentUris.parseId(uri) to secs
         } catch (t: Throwable) {
             runCatching { contentResolver.delete(uri, null, null) }
             throw t

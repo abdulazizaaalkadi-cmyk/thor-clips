@@ -20,8 +20,13 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
  */
 class CaptureUserService() : ICaptureService.Stub() {
 
+    /** Shizuku passes a Context when it can; game-audio capture uses it. */
+    private var baseContext: Context? = null
+
     @Suppress("unused")
-    constructor(context: Context) : this()
+    constructor(context: Context) : this() {
+        baseContext = context
+    }
 
     private val mirrors = HashMap<Int, () -> Unit>()
     private var nextToken = 1
@@ -46,6 +51,7 @@ class CaptureUserService() : ICaptureService.Stub() {
 
     private val recorder by lazy {
         HelperRecorder(
+            context = { baseContext },
             mirror = { id, surface, w, h -> startMirror(id, surface, w, h) },
             unmirror = { t -> stopMirror(t) },
             windows = { windowSnapshot() },

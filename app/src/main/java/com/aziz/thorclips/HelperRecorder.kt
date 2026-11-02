@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference
  * The app adds game audio afterwards.
  */
 class HelperRecorder(
+    private val context: () -> android.content.Context?,
     private val mirror: (displayId: Int, surface: Surface, w: Int, h: Int) -> Int,
     private val unmirror: (token: Int) -> Unit,
     private val windows: () -> String,
@@ -60,6 +61,10 @@ class HelperRecorder(
     private var layoutDesc = ""
     private val tokens = ArrayList<Int>()
     @Volatile private var ring: SampleRing? = null
+    @Volatile private var audio: HelperAudio? = null
+    @Volatile private var audioState = "off"
+    private var wantAudio = true
+    private var appUid = -1
     @Volatile private var format: MediaFormat? = null
 
     private var topId = 0
@@ -83,7 +88,8 @@ class HelperRecorder(
     fun status(): String =
         "state=${if (running) "recording" else if (error.isNotEmpty()) "error" else "idle"};" +
             "live=${live?.name ?: ""};layout=$layoutDesc;codec=$codecMime;game=$game;" +
-            "seconds=$seconds;suspended=$suspended;err=${error.replace(';', ',')}"
+            "seconds=$seconds;suspended=$suspended;audio=$audioState;" +
+            "level=${"%.4f".format(audio?.level ?: 0.0)};err=${error.replace(';', ',')}"
 
     // ------------------------------------------------------------------ start / stop
 
@@ -93,6 +99,8 @@ class HelperRecorder(
         fps = cfg.getInt("fps", 60)
         seconds = cfg.getInt("seconds", 30)
         mode = cfg.getString("mode", "AUTO") ?: "AUTO"
+        wantAudio = cfg.getBoolean("audio", true)
+        appUid = cfg.getInt("appUid", -1)
         launchers = (cfg.getStringArray("launchers") ?: emptyArray()).toSet() +
             setOf("com.android.systemui", "android", "moe.shizuku.privileged.api", "com.aziz.thorclips")
         val done = CountDownLatch(1)
@@ -111,6 +119,7 @@ class HelperRecorder(
                 running = true
                 error = ""
                 result = 0
+                startAudio()
                 note("started mode=$mode ${width}w ${fps}fps ${seconds}s top=$topId bottom=${bottomId ?: "-"}")
                 if (mode == "AUTO" && bottomId != null) {
                     detH.removeCallbacksAndMessages(null)
@@ -128,7 +137,25 @@ class HelperRecorder(
         return result
     }
 
+    private fun startAudio() {
+        runCatching { audio?.stop() }
+        audio = null
+        if (!wantAudio) { audioState = "off"; return }
+        try {
+            val r = SampleRing.fileBacked(ringDir, "audio", (128_000L / 8 * (seconds + 3) * 3 / 2).toInt(), (seconds + 3) * 1_000_000L)
+            audio = HelperAudio(r, appUid) { note(it) }.also { it.start(context()) }
+            audioState = "on"
+            note("game audio capture on")
+        } catch (t: Throwable) {
+            audioState = "failed"
+            note("game audio failed: ${t.cause?.message ?: t.message}")
+        }
+    }
+
     fun stop() {
+        runCatching { audio?.stop() }
+        audio = null
+        audioState = "off"
         running = false
         detH.removeCallbacksAndMessages(null)
         val done = CountDownLatch(1)
@@ -391,23 +418,44 @@ class HelperRecorder(
         val samples = r.pinFrom(r.newestPtsUs() - secs * 1_000_000L, requireKey = true)
         if (samples.isEmpty()) { r.unpin(); out.close(); return -1 }
         val base = samples.first().ptsUs
+        val a = audio
+        val aFmt = a?.format
+        val aRing = a?.ringRef
+        val aud = if (aFmt != null && aRing != null) aRing.pinFrom(base, requireKey = false).filter { it.ptsUs >= base } else emptyList()
         try {
             val muxer = MediaMuxer(out.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             try {
                 val track = muxer.addTrack(f)
+                val aTrack = if (aFmt != null && aud.isNotEmpty()) muxer.addTrack(aFmt) else -1
                 muxer.start()
-                val buf = ByteBuffer.allocateDirect(samples.maxOf { it.size })
+                val buf = ByteBuffer.allocateDirect(maxOf(samples.maxOf { it.size }, aud.maxOfOrNull { it.size } ?: 0))
                 val info = MediaCodec.BufferInfo()
+                val endUs = samples.last().ptsUs
+                var ai = 0
                 for (s in samples) {
+                    // Interleave audio that belongs before this video frame.
+                    while (aTrack >= 0 && ai < aud.size && aud[ai].ptsUs <= s.ptsUs) {
+                        val sm = aud[ai++]
+                        aRing!!.read(sm, buf)
+                        info.set(0, sm.size, sm.ptsUs - base, 0)
+                        muxer.writeSampleData(aTrack, buf, info)
+                    }
                     r.read(s, buf)
                     info.set(0, s.size, s.ptsUs - base, if (s.key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
                     muxer.writeSampleData(track, buf, info)
                 }
+                while (aTrack >= 0 && ai < aud.size && aud[ai].ptsUs <= endUs + 100_000) {
+                    val sm = aud[ai++]
+                    aRing!!.read(sm, buf)
+                    info.set(0, sm.size, sm.ptsUs - base, 0)
+                    muxer.writeSampleData(aTrack, buf, info)
+                }
                 muxer.stop()
             } finally {
                 runCatching { muxer.release() }
+                aRing?.unpin()
             }
-            note("saved ${(samples.last().ptsUs - base) / 1_000_000}s")
+            note("saved ${(samples.last().ptsUs - base) / 1_000_000}s · audio ${if (aud.isEmpty()) "none" else "level %.3f".format(a?.level ?: 0.0)}")
             return base
         } catch (t: Throwable) {
             note("save failed: ${t.message}")

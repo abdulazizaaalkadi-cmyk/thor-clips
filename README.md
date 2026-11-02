@@ -30,6 +30,12 @@ Nothing is written to storage until you save. Clips go to `Movies/DualClips`.
 Android only lets normal apps record the main display. Shizuku runs a tiny helper
 with shell (adb) rights that can mirror the Thor's bottom screen too.
 
+## Credits
+
+- Game-audio capture in the Shizuku helper uses the same technique as
+  [scrcpy](https://github.com/Genymobile/scrcpy) (Apache License 2.0):
+  an audio policy that loops back app playback while it keeps playing on the device.
+
 ## Notes
 
 - Some apps block other apps from recording their audio; their clips will be silent.
