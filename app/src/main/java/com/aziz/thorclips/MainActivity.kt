@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     private lateinit var detailView: TextView
     private lateinit var toggle: TextView
     private lateinit var setupBox: LinearLayout
+    private lateinit var tileHint: TextView
 
     private val shizukuResult = Shizuku.OnRequestPermissionResultListener { _, _ -> refresh() }
     private val shizukuBinder = Shizuku.OnBinderReceivedListener { refresh() }
@@ -115,6 +116,10 @@ class MainActivity : Activity() {
         col.addView(ui.text("Press L3 + R3 while playing to save the last ${settings.seconds} seconds.", 14f, dim = true)
             .apply { setPadding(ui.dp(4), ui.dp(14), 0, 0) })
 
+        tileHint = ui.text("Tip: add the Dual Clips tile to Quick Settings (pull down → edit/pencil) to start it without opening the app.", 13f, dim = true)
+            .apply { setPadding(ui.dp(4), ui.dp(8), 0, 0) }
+        col.addView(tileHint)
+
         setupBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(setupBox)
 
@@ -140,6 +145,7 @@ class MainActivity : Activity() {
             "${settings.seconds}s clips · ${settings.qualityLabel} · ${settings.fps} fps · " +
                 "${settings.screenMode.label} · ~${settings.estimateMb()} MB RAM"
         toggle.text = if (on || (ReplayService.instance != null && !err)) "Stop clip buffer" else "Start clip buffer"
+        tileHint.visibility = if (on) View.GONE else View.VISIBLE
 
         // Setup checklist: only shows what still needs doing.
         setupBox.removeAllViews()
@@ -147,11 +153,9 @@ class MainActivity : Activity() {
         val accOk = accessibilityOn()
         if (!shizukuOk || !accOk) setupBox.addView(ui.section("Setup"))
         if (!shizukuOk) {
-            val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
-            setupBox.addView(ui.settingRow(
-                if (running) "Allow Shizuku access" else "Shizuku is off",
-                { if (running) "Tap to allow" else "Top screen only" }
-            ) { requestShizuku() })
+            setupBox.addView(ui.settingRow("Set up Shizuku for both screens", { "Top screen only now" }) {
+                startActivity(Intent(this, ShizukuSetupActivity::class.java))
+            })
         }
         if (!accOk) {
             setupBox.addView(ui.settingRow("L3 + R3 button", { "Turn on" }) { openAccessibility() })

@@ -166,6 +166,7 @@ class ReplayService : Service() {
         if (running) teardown()
         instance = null
         recording = false
+        ClipTileService.refresh(this)
         glThread.quitSafely()
         encThread.quitSafely()
         detectThread.quitSafely()
@@ -702,6 +703,7 @@ class ReplayService : Service() {
     private fun setStatus(s: String) {
         status = s
         MainActivity.refresh()
+        ClipTileService.refresh(this)
     }
 
     private fun toast(msg: String) {

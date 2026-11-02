@@ -21,6 +21,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
@@ -44,6 +47,24 @@
         </activity>
 
         <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".ShizukuSetupActivity" android:exported="false" />
+        <activity
+            android:name=".ProjectionRequestActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="com.aziz.thorclips.tile"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name=".ClipTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="Dual Clips"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <activity android:name=".ClipsSettingsActivity" android:exported="false" />
         <activity android:name=".TrimActivity" android:exported="false" />
 

@@ -67,14 +67,8 @@ class SettingsActivity : Activity() {
                 runCatching { Shizuku.pingBinder() }.getOrDefault(false) -> "Needs permission"
                 else -> "Off"
             }
-        }) { r ->
-            if (runCatching { Shizuku.pingBinder() }.getOrDefault(false) && !ReplayService.shizukuReady()) {
-                Shizuku.requestPermission(11)
-            } else {
-                packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { startActivity(it) }
-                    ?: Toast.makeText(this, "Shizuku isn't installed", Toast.LENGTH_SHORT).show()
-            }
-            r()
+        }) { _ ->
+            startActivity(Intent(this, ShizukuSetupActivity::class.java))
         })
         col.addView(ui.settingRow("L3 + R3 button", { "Accessibility settings" }) { _ ->
             startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
