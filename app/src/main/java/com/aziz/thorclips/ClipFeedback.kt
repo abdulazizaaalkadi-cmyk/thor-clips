@@ -74,7 +74,8 @@ class ClipFeedback(private val ctx: Context) {
             val want = pending
             if (want != null && want.first == id) { pending = null; p.play(id, want.second, want.second, 1, 0, 1f) }
         }
-        ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) }
+        ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) } +
+            ("shutter" to pool.load(ctx, R.raw.snd_shutter, 1))
     }
 
     /** Plays one of the clip sounds (also used for previews in settings). */
@@ -100,6 +101,14 @@ class ClipFeedback(private val ctx: Context) {
             if (settings.clipPopup) showPopup("Clip saved", "${seconds}s · tap to view", settings.popupMs)
             if (settings.clipNotification && clipId >= 0) notifySaved(clipId, seconds)
         }
+    }
+
+    fun onScreenshot() {
+        if (settings.clipSound) playSound("shutter")
+    }
+
+    fun onScreenshotSaved() {
+        main.post { if (settings.clipPopup) showPopup("Screenshot saved", "Pictures/DualClips", minOf(settings.popupMs, 2000L)) }
     }
 
     fun onFailed(msg: String) {

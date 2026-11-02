@@ -184,6 +184,46 @@ class Compositor(
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
+    /**
+     * Renders the current frame of all screens into an offscreen buffer and returns it
+     * as a bitmap at the output size. Must run on the GL thread.
+     */
+    fun capture(): android.graphics.Bitmap {
+        val w = layout.outW
+        val h = layout.outH
+        val fbo = IntArray(1)
+        val tex = IntArray(1)
+        GLES20.glGenFramebuffers(1, fbo, 0)
+        GLES20.glGenTextures(1, tex, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[0])
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[0])
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, tex[0], 0)
+        try {
+            GLES20.glViewport(0, 0, w, h)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glUseProgram(program)
+            for ((i, r) in layout.regions.withIndex()) {
+                drawQuad(textures[i], matrices[i], r.x, h - r.y - r.h, r.w, r.h)
+            }
+            val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
+            GLES20.glReadPixels(0, 0, w, h, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+            buf.rewind()
+            val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(buf)
+            // GL rows start at the bottom; flip to normal image order.
+            val m = android.graphics.Matrix().apply { preScale(1f, -1f) }
+            val flipped = android.graphics.Bitmap.createBitmap(bmp, 0, 0, w, h, m, false)
+            bmp.recycle()
+            return flipped
+        } finally {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glDeleteFramebuffers(1, fbo, 0)
+            GLES20.glDeleteTextures(1, tex, 0)
+        }
+    }
+
     fun release() {
         if (released) return
         released = true

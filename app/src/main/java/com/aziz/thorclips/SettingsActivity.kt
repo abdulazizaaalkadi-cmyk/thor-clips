@@ -38,7 +38,7 @@ class SettingsActivity : Activity() {
 
         col.addView(ui.section("Recording"))
         col.addView(ui.settingRow("Clip length", { "${s.seconds} s" }) { r ->
-            ui.choose("Clip length", listOf("30 s" to 30, "60 s" to 60, "120 s" to 120), s.seconds) { s.seconds = it; r() }
+            ui.choose("Clip length", listOf("10 s" to 10, "15 s" to 15, "30 s" to 30, "60 s" to 60, "120 s" to 120), s.seconds) { s.seconds = it; r() }
         })
         col.addView(ui.settingRow("Quality", { s.qualityLabel }) { r ->
             ui.choose("Quality", listOf("Low (960 wide)" to 0, "Medium (1280 wide)" to 1, "High (1920 wide)" to 2), s.quality) {
@@ -61,6 +61,22 @@ class SettingsActivity : Activity() {
                 "Without Shizuku only the top screen can be recorded. RAM use now: ~${s.estimateMb()} MB. " +
                 "Changes apply next time you start the buffer.", 13f, dim = true
         ).apply { setPadding(ui.dp(4), ui.dp(10), 0, 0) })
+
+        col.addView(ui.section("Buttons"))
+        col.addView(ui.settingRow("Save clip", { s.clipCombo.label }) { r ->
+            ui.choose("Button combo to save a clip", Combo.values().map { it.label to it }, s.clipCombo) {
+                if (it != Combo.OFF && it == s.shotCombo) s.shotCombo = Combo.OFF
+                s.clipCombo = it; r()
+            }
+        })
+        col.addView(ui.settingRow("Screenshot", { s.shotCombo.label }) { r ->
+            ui.choose("Button combo for a screenshot", Combo.values().map { it.label to it }, s.shotCombo) {
+                if (it != Combo.OFF && it == s.clipCombo) s.clipCombo = Combo.OFF
+                s.shotCombo = it; r()
+            }
+        })
+        col.addView(ui.text("Screenshots capture the recorded screen(s), like your clips, and go to Pictures/DualClips. " +
+            "Pick combos your emulators don't already use.", 13f, dim = true).apply { setPadding(ui.dp(4), ui.dp(8), 0, 0) })
 
         ClipAlertRows.add(this, ui, col, feedback)
 

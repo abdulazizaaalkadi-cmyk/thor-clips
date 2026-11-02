@@ -114,7 +114,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = ui.dp(6) })
         col.addView(pair, ui.lp(top = 12))
 
-        col.addView(ui.text("Press L3 + R3 while playing to save the last ${settings.seconds} seconds.", 14f, dim = true)
+        col.addView(ui.text("${settings.clipCombo.label}: save the last ${settings.seconds}s · ${settings.shotCombo.label}: screenshot", 14f, dim = true)
             .apply { setPadding(ui.dp(4), ui.dp(14), 0, 0) })
 
         tileHint = ui.text("Tip: add the Dual Clips tile to Quick Settings (pull down → edit/pencil) to start it without opening the app.", 13f, dim = true)

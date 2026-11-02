@@ -6,6 +6,17 @@ enum class ScreenMode(val label: String) {
     AUTO("Auto (detect)"), BOTH("Both screens"), TOP("Top screen only"), BOTTOM("Bottom screen only")
 }
 
+/** Button combos for clipping / screenshots (two buttons pressed together). */
+enum class Combo(val label: String, val a: Int, val b: Int) {
+    L3_R3("L3 + R3", android.view.KeyEvent.KEYCODE_BUTTON_THUMBL, android.view.KeyEvent.KEYCODE_BUTTON_THUMBR),
+    SELECT_R3("Select + R3", android.view.KeyEvent.KEYCODE_BUTTON_SELECT, android.view.KeyEvent.KEYCODE_BUTTON_THUMBR),
+    SELECT_L3("Select + L3", android.view.KeyEvent.KEYCODE_BUTTON_SELECT, android.view.KeyEvent.KEYCODE_BUTTON_THUMBL),
+    START_R3("Start + R3", android.view.KeyEvent.KEYCODE_BUTTON_START, android.view.KeyEvent.KEYCODE_BUTTON_THUMBR),
+    START_L3("Start + L3", android.view.KeyEvent.KEYCODE_BUTTON_START, android.view.KeyEvent.KEYCODE_BUTTON_THUMBL),
+    L1_R3("L1 + R3", android.view.KeyEvent.KEYCODE_BUTTON_L1, android.view.KeyEvent.KEYCODE_BUTTON_THUMBR),
+    OFF("Off", -1, -1),
+}
+
 enum class SortOrder(val label: String) { NEWEST("Newest first"), OLDEST("Oldest first"), LONGEST("Longest first") }
 
 /** Dual Clips (recorder) settings. */
@@ -22,7 +33,7 @@ class Settings(context: Context) {
         set(v) = prefs.edit().putInt("quality", v).apply()
 
     var fps: Int
-        get() = prefs.getInt("fps", 30)
+        get() = prefs.getInt("fps", 60)
         set(v) = prefs.edit().putInt("fps", v).apply()
 
     var audio: Boolean
@@ -33,6 +44,14 @@ class Settings(context: Context) {
     var wantRunning: Boolean
         get() = prefs.getBoolean("want_running", false)
         set(v) = prefs.edit().putBoolean("want_running", v).apply()
+
+    var clipCombo: Combo
+        get() = runCatching { Combo.valueOf(prefs.getString("combo_clip", "L3_R3")!!) }.getOrDefault(Combo.L3_R3)
+        set(v) = prefs.edit().putString("combo_clip", v.name).apply()
+
+    var shotCombo: Combo
+        get() = runCatching { Combo.valueOf(prefs.getString("combo_shot", "SELECT_R3")!!) }.getOrDefault(Combo.SELECT_R3)
+        set(v) = prefs.edit().putString("combo_shot", v.name).apply()
 
     var clipSound: Boolean
         get() = prefs.getBoolean("clip_sound", true)

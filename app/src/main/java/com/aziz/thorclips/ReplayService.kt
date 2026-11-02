@@ -750,6 +750,45 @@ class ReplayService : Service() {
         main.post { saveClip() }
     }
 
+    /** Saves the current frame of the recorded screen(s) as a PNG in Pictures/DualClips. */
+    fun requestScreenshot() {
+        if (!running || compositor == null) {
+            feedback.onFailed("clip buffer is off")
+            return
+        }
+        feedback.onScreenshot()
+        buzz()
+        glHandler.post {
+            val comp = compositor ?: return@post
+            val bmp = try { comp.capture() } catch (t: Throwable) {
+                EventLog.add("screenshot failed: ${t.message}"); feedback.onFailed("screenshot failed"); return@post
+            }
+            saveExecutor.execute {
+                try {
+                    val name = "DualShot_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".png"
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + CLIP_FOLDER)
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("couldn't create file")
+                    contentResolver.openOutputStream(uri)!!.use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    contentResolver.update(uri, values, null, null)
+                    EventLog.add("screenshot saved ${bmp.width}x${bmp.height}")
+                    feedback.onScreenshotSaved()
+                } catch (t: Throwable) {
+                    EventLog.add("screenshot save failed: ${t.message}")
+                    feedback.onFailed("screenshot failed")
+                } finally {
+                    bmp.recycle()
+                }
+            }
+        }
+    }
+
     private fun saveClip() {
         val ring = videoRing
         val vFmt = videoFormat
