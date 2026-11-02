@@ -29,6 +29,18 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("audio", true)
         set(v) = prefs.edit().putBoolean("audio", v).apply()
 
+    var clipSound: Boolean
+        get() = prefs.getBoolean("clip_sound", true)
+        set(v) = prefs.edit().putBoolean("clip_sound", v).apply()
+
+    var clipPopup: Boolean
+        get() = prefs.getBoolean("clip_popup", true)
+        set(v) = prefs.edit().putBoolean("clip_popup", v).apply()
+
+    var clipNotification: Boolean
+        get() = prefs.getBoolean("clip_notif", true)
+        set(v) = prefs.edit().putBoolean("clip_notif", v).apply()
+
     var screenMode: ScreenMode
         get() = runCatching { ScreenMode.valueOf(prefs.getString("screens", "AUTO")!!) }.getOrDefault(ScreenMode.AUTO)
         set(v) = prefs.edit().putString("screens", v.name).apply()

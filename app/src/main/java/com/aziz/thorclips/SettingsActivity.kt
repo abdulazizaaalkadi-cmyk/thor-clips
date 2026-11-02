@@ -60,6 +60,37 @@ class SettingsActivity : Activity() {
                 "Changes apply next time you start the buffer.", 13f, dim = true
         ).apply { setPadding(ui.dp(4), ui.dp(10), 0, 0) })
 
+        col.addView(ui.section("When you clip"))
+        col.addView(ui.settingRow("Sound", { if (s.clipSound) "On" else "Off" }) { r -> s.clipSound = !s.clipSound; r() })
+        col.addView(ui.settingRow("Pop-up over game", {
+            when {
+                !s.clipPopup -> "Off"
+                !android.provider.Settings.canDrawOverlays(this) -> "Needs permission"
+                else -> "On"
+            }
+        }) { r ->
+            if (s.clipPopup && !android.provider.Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Find Dual Clips and allow \"Display over other apps\"", Toast.LENGTH_LONG).show()
+                startActivity(Intent(SysSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:$packageName")))
+            } else {
+                s.clipPopup = !s.clipPopup
+            }
+            r()
+        })
+        col.addView(ui.settingRow("Notification", { if (s.clipNotification) "On" else "Off" }) { r ->
+            s.clipNotification = !s.clipNotification; r()
+        })
+        col.addView(ui.settingRow("Test", { "Play sound + pop-up" }) { _ ->
+            val f = ClipFeedback(this)
+            f.onPressed()
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Clip saved · pop-up needs \"Display over other apps\"", Toast.LENGTH_SHORT).show()
+            } else {
+                f.onSaved(-1, s.seconds)
+            }
+        })
+
         col.addView(ui.section("Setup"))
         col.addView(ui.settingRow("Shizuku", {
             when {

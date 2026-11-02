@@ -97,6 +97,7 @@ class ReplayService : Service() {
 
     private lateinit var settings: Settings
     private lateinit var clipsPrefs: ClipsPrefs
+    private lateinit var feedback: ClipFeedback
     private val main = Handler(Looper.getMainLooper())
     private val glThread = HandlerThread("tc-gl").apply { start() }
     private val glHandler = Handler(glThread.looper)
@@ -150,6 +151,7 @@ class ReplayService : Service() {
         super.onCreate()
         settings = Settings(this)
         clipsPrefs = ClipsPrefs(this)
+        feedback = ClipFeedback(this)
         instance = this
     }
 
@@ -171,6 +173,7 @@ class ReplayService : Service() {
         encThread.quitSafely()
         detectThread.quitSafely()
         saveExecutor.shutdown()
+        feedback.release()
         super.onDestroy()
     }
 
@@ -560,6 +563,7 @@ class ReplayService : Service() {
         }
         saving = true
         buzz()
+        feedback.onPressed()
         val seconds = settings.seconds
         val newest = ring.newestPtsUs()
         val video = ring.pinFrom(newest - seconds * 1_000_000L, requireKey = true)
@@ -579,8 +583,9 @@ class ReplayService : Service() {
         saveExecutor.execute {
             var ok = false
             var err: String? = null
+            var id = -1L
             try {
-                val id = writeMp4(ring, video, vFmt, aRing, aud, aFmt, base)
+                id = writeMp4(ring, video, vFmt, aRing, aud, aFmt, base)
                 if (game != null) clipsPrefs.setGame(id, game)
                 ok = true
             } catch (t: Throwable) {
@@ -592,7 +597,7 @@ class ReplayService : Service() {
                 saving = false
             }
             val len = ((video.last().ptsUs - base) / 1_000_000L).toInt()
-            main.post { toast(if (ok) "Clip saved (${len}s)" else "Clip failed: $err") }
+            if (ok) feedback.onSaved(id, len) else feedback.onFailed(err ?: "unknown error")
         }
     }
 
