@@ -55,6 +55,55 @@ class CaptureUserService() : ICaptureService.Stub() {
     override fun info(): String =
         "uid=${Process.myUid()} sdk=${Build.VERSION.SDK_INT}\n" + synchronized(log) { log.toString() }
 
+    override fun windowSnapshot(): String {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("dumpsys", "window", "windows"))
+            val text = proc.inputStream.bufferedReader().use { it.readText() }
+            proc.waitFor()
+            parseWindows(text)
+        } catch (t: Throwable) {
+            note("windowSnapshot failed: $t")
+            ""
+        }
+    }
+
+    /**
+     * Walks the "dumpsys window windows" output (topmost window first) and keeps
+     * visible windows with their display, owning package and window type.
+     */
+    private fun parseWindows(text: String): String {
+        val out = StringBuilder()
+        val header = Regex("""^\s*Window #\d+ Window\{[0-9a-f]+ u\d+ ([^}]*)\}""")
+        var name: String? = null
+        var display = -1
+        var pkg: String? = null
+        var type: String? = null
+        var visible = false
+        fun flush() {
+            val n = name ?: return
+            val p = pkg ?: n.substringBefore('/').trim()
+            if (visible && display >= 0 && p.contains('.')) {
+                out.append(display).append('|').append(p).append('|').append(type ?: "?").append('\n')
+            }
+        }
+        for (line in text.lineSequence()) {
+            val m = header.find(line)
+            if (m != null) {
+                flush()
+                name = m.groupValues[1]
+                display = -1; pkg = null; type = null; visible = false
+                continue
+            }
+            if (name == null) continue
+            RX_DISPLAY.find(line)?.let { display = it.groupValues[1].toInt() }
+            RX_PACKAGE.find(line)?.let { if (pkg == null) pkg = it.groupValues[1] }
+            RX_TYPE.find(line)?.let { if (type == null) type = it.groupValues[1] }
+            if (line.contains("isOnScreen=true") || line.contains("isVisible=true")) visible = true
+        }
+        flush()
+        return out.toString()
+    }
+
     override fun startMirror(displayId: Int, surface: Surface, width: Int, height: Int): Int {
         val release = tryDisplayManagerMirror(displayId, surface, width, height)
             ?: trySurfaceControlMirror(displayId, surface, width, height)
@@ -138,5 +187,11 @@ class CaptureUserService() : ICaptureService.Stub() {
         val x = (w - fw) / 2
         val y = (h - fh) / 2
         return Rect(x, y, x + fw, y + fh)
+    }
+
+    companion object {
+        private val RX_DISPLAY = Regex("""mDisplayId=(\d+)""")
+        private val RX_PACKAGE = Regex("""\bpackage=(\S+)""")
+        private val RX_TYPE = Regex("""\bty=(\w+)""")
     }
 }

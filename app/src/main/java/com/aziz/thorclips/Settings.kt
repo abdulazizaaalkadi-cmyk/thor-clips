@@ -2,6 +2,13 @@ package com.aziz.thorclips
 
 import android.content.Context
 
+enum class ScreenMode(val label: String) {
+    AUTO("Auto (detect)"), BOTH("Both screens"), TOP("Top screen only"), BOTTOM("Bottom screen only")
+}
+
+enum class SortOrder(val label: String) { NEWEST("Newest first"), OLDEST("Oldest first"), LONGEST("Longest first") }
+
+/** Dual Clips (recorder) settings. */
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
@@ -22,7 +29,17 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("audio", true)
         set(v) = prefs.edit().putBoolean("audio", v).apply()
 
-    /** Output width of the stacked video (top screen is scaled to this width). */
+    var screenMode: ScreenMode
+        get() = runCatching { ScreenMode.valueOf(prefs.getString("screens", "AUTO")!!) }.getOrDefault(ScreenMode.AUTO)
+        set(v) = prefs.edit().putString("screens", v.name).apply()
+
+    var theme: ThemeMode
+        get() = runCatching { ThemeMode.valueOf(prefs.getString("theme", "DARK")!!) }.getOrDefault(ThemeMode.DARK)
+        set(v) = prefs.edit().putString("theme", v.name).apply()
+
+    val qualityLabel get() = arrayOf("Low", "Medium", "High")[quality.coerceIn(0, 2)]
+
+    /** Output width of the stacked video (each screen is scaled to fit this width). */
     val width: Int get() = intArrayOf(960, 1280, 1920)[quality.coerceIn(0, 2)]
 
     /** HEVC bitrate. H.264 fallback uses 1.5x. */
@@ -38,4 +55,41 @@ class Settings(context: Context) {
         val audio = if (audio) 128_000L / 8 * (seconds + 3) * 3 / 2 else 0L
         return ((video + audio) / (1024 * 1024)).toInt()
     }
+
+    fun palette(ctx: Context) = Ui.palette(ctx, theme, Accent.PURPLE)
+}
+
+/** My Clips (library) settings, kept separate so it can have its own look. */
+class ClipsPrefs(context: Context) {
+    private val prefs = context.getSharedPreferences("clips", Context.MODE_PRIVATE)
+
+    var theme: ThemeMode
+        get() = runCatching { ThemeMode.valueOf(prefs.getString("theme", "DARK")!!) }.getOrDefault(ThemeMode.DARK)
+        set(v) = prefs.edit().putString("theme", v.name).apply()
+
+    var accent: Accent
+        get() = runCatching { Accent.valueOf(prefs.getString("accent", "PURPLE")!!) }.getOrDefault(Accent.PURPLE)
+        set(v) = prefs.edit().putString("accent", v.name).apply()
+
+    var previews: Boolean
+        get() = prefs.getBoolean("previews", false)
+        set(v) = prefs.edit().putBoolean("previews", v).apply()
+
+    var sort: SortOrder
+        get() = runCatching { SortOrder.valueOf(prefs.getString("sort", "NEWEST")!!) }.getOrDefault(SortOrder.NEWEST)
+        set(v) = prefs.edit().putString("sort", v.name).apply()
+
+    /** "package/activity|action" of the editor picked last time, or null. */
+    var editor: String?
+        get() = prefs.getString("editor", null)
+        set(v) = prefs.edit().putString("editor", v).apply()
+
+    var favourites: Set<String>
+        get() = prefs.getStringSet("favs", emptySet()) ?: emptySet()
+        set(v) = prefs.edit().putStringSet("favs", v.toSet()).apply()
+
+    fun gameFor(id: Long): String? = prefs.getString("game_$id", null)
+    fun setGame(id: Long, pkg: String) = prefs.edit().putString("game_$id", pkg).apply()
+
+    fun palette(ctx: Context) = Ui.palette(ctx, theme, accent)
 }

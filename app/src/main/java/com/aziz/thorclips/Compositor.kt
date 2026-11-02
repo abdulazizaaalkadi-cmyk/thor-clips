@@ -17,39 +17,30 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
-/** Where each screen goes in the stacked output video. */
-data class Layout(
-    val outW: Int, val outH: Int,
-    val topW: Int, val topH: Int, val topX: Int,
-    val botW: Int, val botH: Int, val botX: Int,
-) {
-    val hasBottom get() = botW > 0 && botH > 0
+/** One screen's place in the stacked output video (y measured from the top). */
+data class Region(val w: Int, val h: Int, val x: Int, val y: Int)
 
+/** Screens stacked top-to-bottom, all scaled by the same factor so they keep their real size ratio. */
+data class Layout(val outW: Int, val outH: Int, val regions: List<Region>) {
     companion object {
         private fun even(v: Float) = (v.toInt() / 2) * 2
         private fun align16(v: Int) = (v + 15) / 16 * 16
 
-        fun compute(top: Point, bottom: Point?, targetW: Int): Layout {
-            val s = targetW.toFloat() / top.x
-            val tw = even(top.x * s)
-            val th = even(top.y * s)
-            var bw = 0
-            var bh = 0
-            if (bottom != null) {
-                var bs = s
-                if (bottom.x * bs > targetW) bs = targetW.toFloat() / bottom.x
-                bw = even(bottom.x * bs)
-                bh = even(bottom.y * bs)
-            }
-            val outW = align16(maxOf(tw, bw))
-            val outH = align16(th + bh)
-            return Layout(outW, outH, tw, th, (outW - tw) / 2, bw, bh, (outW - bw) / 2)
+        fun compute(screens: List<Point>, targetW: Int): Layout {
+            require(screens.isNotEmpty())
+            val s = targetW.toFloat() / screens.maxOf { it.x }
+            val sizes = screens.map { even(it.x * s) to even(it.y * s) }
+            val outW = align16(sizes.maxOf { it.first })
+            val outH = align16(sizes.sumOf { it.second })
+            var y = 0
+            val regions = sizes.map { (w, h) -> Region(w, h, (outW - w) / 2, y).also { y += h } }
+            return Layout(outW, outH, regions)
         }
     }
 }
 
 /**
- * Draws the top and bottom screen mirrors, stacked, into the encoder's input surface.
+ * Draws each mirrored screen into its region of the encoder's input surface.
  * Runs entirely on [handler]'s thread (it owns the GL context).
  *
  * New frames from the mirrors are latched as soon as they arrive (so the system never
@@ -72,15 +63,13 @@ class Compositor(
     private val aTex: Int
     private val uTexMatrix: Int
 
-    private val texTop: Int
-    private val texBot: Int
-    val topTexture: SurfaceTexture
-    val botTexture: SurfaceTexture?
-    val topSurface: Surface
-    val botSurface: Surface?
+    private val textures: IntArray
+    private val surfaceTextures = ArrayList<SurfaceTexture>()
+    private val matrices = ArrayList<FloatArray>()
 
-    private val mTop = FloatArray(16)
-    private val mBot = FloatArray(16)
+    /** One input Surface per region, in the same order as [Layout.regions]. */
+    val surfaces = ArrayList<Surface>()
+
     private var lastDraw = 0L
     private var drawScheduled = false
     private var released = false
@@ -124,44 +113,35 @@ class Compositor(
         aTex = GLES20.glGetAttribLocation(program, "aTex")
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
 
-        val tex = IntArray(2)
-        GLES20.glGenTextures(2, tex, 0)
-        texTop = tex[0]
-        texBot = tex[1]
-        for (t in tex) {
+        val n = layout.regions.size
+        textures = IntArray(n)
+        GLES20.glGenTextures(n, textures, 0)
+        for ((i, r) in layout.regions.withIndex()) {
+            val t = textures[i]
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        }
-
-        topTexture = SurfaceTexture(texTop).apply {
-            setDefaultBufferSize(layout.topW, layout.topH)
-            setOnFrameAvailableListener({ onFrame(it) }, handler)
-        }
-        topSurface = Surface(topTexture)
-
-        if (layout.hasBottom) {
-            botTexture = SurfaceTexture(texBot).apply {
-                setDefaultBufferSize(layout.botW, layout.botH)
-                setOnFrameAvailableListener({ onFrame(it) }, handler)
+            val m = FloatArray(16)
+            val st = SurfaceTexture(t).apply {
+                setDefaultBufferSize(r.w, r.h)
+                setOnFrameAvailableListener({ onFrame(i) }, handler)
+                getTransformMatrix(m)
             }
-            botSurface = Surface(botTexture)
-        } else {
-            botTexture = null
-            botSurface = null
+            surfaceTextures += st
+            matrices += m
+            surfaces += Surface(st)
         }
-        topTexture.getTransformMatrix(mTop)
-        botTexture?.getTransformMatrix(mBot)
     }
 
-    private fun onFrame(st: SurfaceTexture) {
+    private fun onFrame(i: Int) {
         if (released) return
         // Always latch right away so the mirror's buffers are returned promptly.
         try {
+            val st = surfaceTextures[i]
             st.updateTexImage()
-            st.getTransformMatrix(if (st === topTexture) mTop else mBot)
+            st.getTransformMatrix(matrices[i])
         } catch (_: Throwable) {
             return
         }
@@ -181,13 +161,9 @@ class Compositor(
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(program)
 
-        // GL's origin is bottom-left: the top screen sits at the top of the frame.
-        drawQuad(texTop, mTop, layout.topX, layout.outH - layout.topH, layout.topW, layout.topH)
-        if (layout.hasBottom) {
-            drawQuad(
-                texBot, mBot, layout.botX,
-                layout.outH - layout.topH - layout.botH, layout.botW, layout.botH
-            )
+        for ((i, r) in layout.regions.withIndex()) {
+            // GL's origin is bottom-left; regions are measured from the top.
+            drawQuad(textures[i], matrices[i], r.x, layout.outH - r.y - r.h, r.w, r.h)
         }
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, System.nanoTime())
@@ -211,17 +187,14 @@ class Compositor(
     fun release() {
         if (released) return
         released = true
-        runCatching { topSurface.release() }
-        runCatching { botSurface?.release() }
-        runCatching { topTexture.release() }
-        runCatching { botTexture?.release() }
+        surfaces.forEach { runCatching { it.release() } }
+        surfaceTextures.forEach { runCatching { it.release() } }
         runCatching { GLES20.glDeleteProgram(program) }
-        runCatching { GLES20.glDeleteTextures(2, intArrayOf(texTop, texBot), 0) }
+        runCatching { GLES20.glDeleteTextures(textures.size, textures, 0) }
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
         EGL14.eglDestroyContext(eglDisplay, eglContext)
         EGL14.eglReleaseThread()
-        EGL14.eglTerminate(eglDisplay)
     }
 
     private fun buildProgram(): Int {

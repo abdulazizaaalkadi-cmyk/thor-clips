@@ -26,7 +26,7 @@ class ClipAccessibilityService : AccessibilityService() {
             fired = true
             val svc = ReplayService.instance
             if (svc != null) svc.requestSave()
-            else Toast.makeText(this, "Thor Clips: buffer is off", Toast.LENGTH_SHORT).show()
+            else Toast.makeText(this, "Dual Clips: buffer is off", Toast.LENGTH_SHORT).show()
         }
         if (!l3 && !r3) fired = false
         return false

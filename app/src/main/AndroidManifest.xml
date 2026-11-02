@@ -8,10 +8,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
-        android:label="Thor Clips"
-        android:icon="@android:drawable/presence_video_online"
+        android:label="Dual Clips"
+        android:icon="@drawable/ic_dualclips"
         android:largeHeap="true"
-        android:theme="@android:style/Theme.DeviceDefault">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -30,7 +30,7 @@
         <activity
             android:name=".ClipsActivity"
             android:exported="true"
-            android:icon="@android:drawable/ic_menu_gallery"
+            android:icon="@drawable/ic_myclips"
             android:label="My Clips"
             android:taskAffinity="com.aziz.thorclips.clips">
             <intent-filter>
@@ -43,6 +43,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".ClipsSettingsActivity" android:exported="false" />
+        <activity android:name=".TrimActivity" android:exported="false" />
+
         <service
             android:name=".ReplayService"
             android:exported="false"
@@ -51,7 +55,7 @@
         <service
             android:name=".ClipAccessibilityService"
             android:exported="true"
-            android:label="Thor Clips: L3 + R3 saves a clip"
+            android:label="Dual Clips: L3 + R3 saves a clip"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

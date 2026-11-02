@@ -15,4 +15,8 @@ interface ICaptureService {
 
     // Diagnostics: uid, SDK level and the log of what was tried.
     String info() = 3;
+
+    // Visible app windows per display, topmost first, one per line:
+    // "displayId|package|windowType". Used to tell which screen a game is on.
+    String windowSnapshot() = 4;
 }

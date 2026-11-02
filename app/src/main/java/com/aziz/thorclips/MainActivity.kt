@@ -4,24 +4,21 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as SysSettings
 import android.text.TextUtils
-import android.view.Gravity
 import android.view.View
-import android.widget.Button
-import android.widget.CheckBox
+import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import rikka.shizuku.Shizuku
 
+/** Dual Clips home: status, start/stop, save, and setup checklist. */
 class MainActivity : Activity() {
 
     companion object {
@@ -35,12 +32,14 @@ class MainActivity : Activity() {
     }
 
     private lateinit var settings: Settings
+    private lateinit var ui: Ui
+    private var themeKey = ""
+
+    private lateinit var dot: View
     private lateinit var statusView: TextView
-    private lateinit var shizukuView: TextView
-    private lateinit var accView: TextView
-    private lateinit var memView: TextView
-    private lateinit var toggle: Button
-    private lateinit var diagView: TextView
+    private lateinit var detailView: TextView
+    private lateinit var toggle: TextView
+    private lateinit var setupBox: LinearLayout
 
     private val shizukuResult = Shizuku.OnRequestPermissionResultListener { _, _ -> refresh() }
     private val shizukuBinder = Shizuku.OnBinderReceivedListener { refresh() }
@@ -49,7 +48,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
-        setContentView(buildUi())
         Shizuku.addRequestPermissionResultListener(shizukuResult)
         Shizuku.addBinderReceivedListenerSticky(shizukuBinder)
         Shizuku.addBinderDeadListener(shizukuDead)
@@ -59,6 +57,13 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         current = this
+        val key = settings.theme.name + resources.configuration.uiMode
+        if (key != themeKey) {
+            themeKey = key
+            ui = Ui(this, settings.palette(this))
+            ui.applyWindow(this)
+            setContentView(build())
+        }
         render()
     }
 
@@ -76,132 +81,81 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ UI
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun header(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 16f
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(18), 0, dp(6))
-    }
-
-    private fun buildUi(): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(40))
-        }
-        col.addView(TextView(this).apply {
-            text = "Thor Clips"
-            textSize = 26f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        statusView = TextView(this).apply { textSize = 15f; setPadding(0, dp(6), 0, 0) }
-        col.addView(statusView)
-
-        col.addView(header("Setup"))
-        shizukuView = TextView(this)
-        col.addView(shizukuView)
-        col.addView(Button(this).apply {
-            text = "Allow Shizuku access"
-            setOnClickListener { requestShizuku() }
-        })
-        accView = TextView(this).apply { setPadding(0, dp(10), 0, 0) }
-        col.addView(accView)
-        col.addView(Button(this).apply {
-            text = "Turn on L3 + R3 button"
-            setOnClickListener {
-                Toast.makeText(this@MainActivity, "Find \"Thor Clips\" and turn it on", Toast.LENGTH_LONG).show()
-                startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+    private fun build(): View {
+        val col = ui.column()
+        col.addView(ui.header("Dual Clips", R.drawable.ic_dualclips) {
+            startActivity(Intent(this, SettingsActivity::class.java))
         })
 
-        col.addView(header("Clip length"))
-        col.addView(radio(listOf("30 s" to 30, "60 s" to 60, "120 s" to 120), settings.seconds) {
-            settings.seconds = it; render()
-        })
-        col.addView(header("Quality"))
-        col.addView(radio(listOf("Low" to 0, "Medium" to 1, "High" to 2), settings.quality) {
-            settings.quality = it; render()
-        })
-        col.addView(header("Frame rate"))
-        col.addView(radio(listOf("30 fps" to 30, "60 fps" to 60), settings.fps) {
-            settings.fps = it; render()
-        })
-        col.addView(CheckBox(this).apply {
-            text = "Include game audio"
-            isChecked = settings.audio
-            setOnCheckedChangeListener { _, c -> settings.audio = c; render() }
-        })
-        memView = TextView(this).apply { setPadding(0, dp(6), 0, 0) }
-        col.addView(memView)
-        col.addView(TextView(this).apply {
-            text = "Changes apply next time you start the buffer."
-            alpha = 0.6f
-        })
+        // Status card
+        val card = ui.column(18).apply { background = ui.borderCard() }
+        val top = ui.row()
+        dot = View(this)
+        top.addView(dot, LinearLayout.LayoutParams(ui.dp(14), ui.dp(14)).apply { rightMargin = ui.dp(10) })
+        statusView = ui.text("", 20f, bold = true)
+        top.addView(statusView)
+        card.addView(top)
+        detailView = ui.text("", 14f, dim = true).apply { setPadding(0, ui.dp(8), 0, 0) }
+        card.addView(detailView)
+        col.addView(card, ui.lp(top = 20))
 
-        toggle = Button(this).apply {
-            textSize = 18f
-            setOnClickListener { onToggle() }
-        }
-        col.addView(toggle, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
-        col.addView(Button(this).apply {
-            text = "Save clip now"
-            setOnClickListener {
-                ReplayService.instance?.requestSave()
-                    ?: Toast.makeText(this@MainActivity, "Start the buffer first", Toast.LENGTH_SHORT).show()
-            }
-        })
+        toggle = ui.primaryButton("") { onToggle() }
+        col.addView(toggle, ui.lp(top = 16))
 
-        col.addView(Button(this).apply {
-            text = "Open my clips"
-            setOnClickListener { startActivity(Intent(this@MainActivity, ClipsActivity::class.java)) }
-        })
-        col.addView(Button(this).apply {
-            text = "Add My Clips to home screen / Cocoon"
-            setOnClickListener { pinClipsShortcut() }
-        })
+        val pair = ui.row()
+        pair.addView(ui.secondaryButton("Save clip now") {
+            ReplayService.instance?.requestSave()
+                ?: Toast.makeText(this, "Start the clip buffer first", Toast.LENGTH_SHORT).show()
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = ui.dp(6) })
+        pair.addView(ui.secondaryButton("My Clips") {
+            startActivity(Intent(this, ClipsActivity::class.java))
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = ui.dp(6) })
+        col.addView(pair, ui.lp(top = 12))
 
-        col.addView(header("Diagnostics"))
-        diagView = TextView(this).apply {
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-            setTextIsSelectable(true)
-        }
-        col.addView(diagView)
+        col.addView(ui.text("Press L3 + R3 while playing to save the last ${settings.seconds} seconds.", 14f, dim = true)
+            .apply { setPadding(ui.dp(4), ui.dp(14), 0, 0) })
 
-        return ScrollView(this).apply { addView(col) }
-    }
+        setupBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(setupBox)
 
-    private fun radio(options: List<Pair<String, Int>>, selected: Int, onPick: (Int) -> Unit): RadioGroup {
-        val g = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL; gravity = Gravity.START }
-        options.forEach { (label, value) ->
-            val b = RadioButton(this).apply {
-                text = label
-                id = View.generateViewId()
-                isChecked = value == selected
-                setPadding(0, 0, dp(16), 0)
-            }
-            g.addView(b)
-            b.setOnCheckedChangeListener { _, checked -> if (checked) onPick(value) }
-        }
-        return g
+        toggle.requestFocus()
+        return ScrollView(this).apply { addView(col); isFillViewport = true }
     }
 
     fun render() {
-        val running = ReplayService.instance != null && !ReplayService.status.startsWith("Stopped") &&
-            !ReplayService.status.startsWith("Error")
-        statusView.text = ReplayService.status
-
-        shizukuView.text = when {
-            !Shizuku.pingBinder() -> "✗ Shizuku isn't running. Open the Shizuku app and start it."
-            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED -> "✗ Shizuku is running, but Thor Clips isn't allowed yet."
-            else -> "✓ Shizuku ready"
+        if (!::ui.isInitialized) return
+        val on = ReplayService.recording
+        val err = ReplayService.status.startsWith("Error")
+        dot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (on) 0xFF34D399.toInt() else if (err) 0xFFF87171.toInt() else ui.p.dim)
         }
-        accView.text = if (accessibilityOn()) "✓ L3 + R3 button is on" else "✗ L3 + R3 button is off (you can still use the notification's Save clip)"
-        memView.text = "Uses about ${settings.estimateMb()} MB of RAM while running."
-        toggle.text = if (running) "Stop clip buffer" else "Start clip buffer"
-        diagView.text = ReplayService.diagnostics.ifEmpty { "Start the buffer to see display info." } +
-            "\nversion ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
+        statusView.text = when {
+            on -> ReplayService.status
+            err -> "Something went wrong"
+            ReplayService.instance != null -> ReplayService.status
+            else -> "Clip buffer is off"
+        }
+        detailView.text = if (err) ReplayService.status.removePrefix("Error: ") else
+            "${settings.seconds}s clips · ${settings.qualityLabel} · ${settings.fps} fps · " +
+                "${settings.screenMode.label} · ~${settings.estimateMb()} MB RAM"
+        toggle.text = if (on || (ReplayService.instance != null && !err)) "Stop clip buffer" else "Start clip buffer"
+
+        // Setup checklist: only shows what still needs doing.
+        setupBox.removeAllViews()
+        val shizukuOk = ReplayService.shizukuReady()
+        val accOk = accessibilityOn()
+        if (!shizukuOk || !accOk) setupBox.addView(ui.section("Setup"))
+        if (!shizukuOk) {
+            val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+            setupBox.addView(ui.settingRow(
+                if (running) "Allow Shizuku access" else "Shizuku is off",
+                { if (running) "Tap to allow" else "Top screen only" }
+            ) { requestShizuku() })
+        }
+        if (!accOk) {
+            setupBox.addView(ui.settingRow("L3 + R3 button", { "Turn on" }) { openAccessibility() })
+        }
     }
 
     private fun accessibilityOn(): Boolean {
@@ -215,29 +169,6 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ actions
 
-    /** Asks the default launcher (Cocoon) to pin a "My Clips" shortcut. */
-    private fun pinClipsShortcut() {
-        val sm = getSystemService(android.content.pm.ShortcutManager::class.java)
-        if (sm == null || !sm.isRequestPinShortcutSupported) {
-            Toast.makeText(this, "Your launcher doesn't accept shortcuts. Make Cocoon the default launcher first.", Toast.LENGTH_LONG).show()
-            return
-        }
-        val intent = Intent(this, ClipsActivity::class.java).setAction(Intent.ACTION_VIEW)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        val info = android.content.pm.ShortcutInfo.Builder(this, "my-clips-pinned")
-            .setShortLabel("My Clips")
-            .setLongLabel("My Clips")
-            .setIcon(android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_gallery))
-            .setIntent(intent)
-            .build()
-        val ok = sm.requestPinShortcut(info, null)
-        Toast.makeText(
-            this,
-            if (ok) "Sent to your launcher. In Cocoon: Start → New → Add Games → My Clips" else "Launcher refused the shortcut",
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
     private fun askBasicPermissions() {
         val want = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -249,24 +180,32 @@ class MainActivity : Activity() {
         if (want.isNotEmpty()) requestPermissions(want.toTypedArray(), REQ_PERMS)
     }
 
-    private fun requestShizuku() {
+    fun requestShizuku() {
+        val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
         when {
-            !Shizuku.pingBinder() ->
-                Toast.makeText(this, "Open Shizuku and start it first", Toast.LENGTH_LONG).show()
+            !running -> ui.dialog().setTitle("Shizuku is off")
+                .setMessage("Without Shizuku, Dual Clips can only record the top screen.\n\n" +
+                    "To record both screens: connect to Wi-Fi, open Shizuku and tap Start.")
+                .setPositiveButton("Open Shizuku") { _, _ ->
+                    packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { startActivity(it) }
+                        ?: Toast.makeText(this, "Shizuku isn't installed", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("OK", null).show()
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED ->
                 Toast.makeText(this, "Already allowed", Toast.LENGTH_SHORT).show()
             else -> Shizuku.requestPermission(REQ_SHIZUKU)
         }
     }
 
+    fun openAccessibility() {
+        Toast.makeText(this, "Find \"Dual Clips\" and turn it on", Toast.LENGTH_LONG).show()
+        startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
     private fun onToggle() {
         val svc = ReplayService.instance
-        if (svc != null && !ReplayService.status.startsWith("Error") && !ReplayService.status.startsWith("Stopped")) {
+        if (svc != null && !ReplayService.status.startsWith("Error")) {
             startService(Intent(this, ReplayService::class.java).setAction(ReplayService.ACTION_STOP))
-            return
-        }
-        if (!Shizuku.pingBinder() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Set up Shizuku first", Toast.LENGTH_SHORT).show()
             return
         }
         askBasicPermissions()
@@ -281,7 +220,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQ_PROJECTION) return
         if (resultCode != RESULT_OK || data == null) {
-            Toast.makeText(this, "Needed for game audio and to keep the buffer running", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Needed to record the screen and game audio", Toast.LENGTH_LONG).show()
             return
         }
         val i = Intent(this, ReplayService::class.java)

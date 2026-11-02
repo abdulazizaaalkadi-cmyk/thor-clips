@@ -1,10 +1,10 @@
-# Thor Clips
+# Dual Clips (formerly Thor Clips)
 
 Medal / ShadowPlay-style instant replay for the **AYN Thor**: it keeps the last
 30, 60 or 120 seconds of **both screens** (stacked, like a real DS) plus game audio
 in memory, and saves a clip when you press **L3 + R3**.
 
-Nothing is written to storage until you save. Clips go to `Movies/ThorClips`.
+Nothing is written to storage until you save. Clips go to `Movies/DualClips`.
 
 ## Install
 
