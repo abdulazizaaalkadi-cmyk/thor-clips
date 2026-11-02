@@ -1,5 +1,7 @@
 package com.aziz.thorclips;
 
+import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.view.Surface;
 
 // Runs inside a Shizuku (shell-privileged) process. Its only job is to mirror
@@ -19,4 +21,16 @@ interface ICaptureService {
     // Visible app windows per display, topmost first, one per line:
     // "displayId|package|windowType". Used to tell which screen a game is on.
     String windowSnapshot() = 4;
+
+    // ---- Recorder running inside this (shell) process, so it survives low memory ----
+    // Returns 0 on success, -1 on failure (see recorderStatus()).
+    int startRecording(in Bundle config) = 5;
+    void stopRecording() = 6;
+    // "state=recording;live=BOTH;layout=1280x1440;codec=...;game=...;err=..."
+    String recorderStatus() = 7;
+    // Writes the last N seconds (video only) to out; returns start time in µs or -1.
+    long saveClip(in ParcelFileDescriptor out, int seconds) = 8;
+    boolean screenshot(in ParcelFileDescriptor out) = 9;
+    // Helper log lines since the last call.
+    String takeLog() = 10;
 }

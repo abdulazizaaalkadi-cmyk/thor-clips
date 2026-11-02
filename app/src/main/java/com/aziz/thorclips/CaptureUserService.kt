@@ -44,7 +44,23 @@ class CaptureUserService() : ICaptureService.Stub() {
         }
     }
 
+    private val recorder by lazy {
+        HelperRecorder(
+            mirror = { id, surface, w, h -> startMirror(id, surface, w, h) },
+            unmirror = { t -> stopMirror(t) },
+            windows = { windowSnapshot() },
+        )
+    }
+
+    override fun startRecording(config: android.os.Bundle): Int = recorder.start(config)
+    override fun stopRecording() = recorder.stop()
+    override fun recorderStatus(): String = recorder.status()
+    override fun saveClip(out: android.os.ParcelFileDescriptor, seconds: Int): Long = recorder.saveClip(out, seconds)
+    override fun screenshot(out: android.os.ParcelFileDescriptor): Boolean = recorder.screenshot(out)
+    override fun takeLog(): String = recorder.takeLog()
+
     override fun destroy() {
+        runCatching { recorder.stop() }
         synchronized(mirrors) {
             mirrors.values.forEach { runCatching { it() } }
             mirrors.clear()

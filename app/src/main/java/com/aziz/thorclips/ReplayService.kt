@@ -60,6 +60,7 @@ class ReplayService : Service() {
         const val ACTION_SAVE = "com.aziz.thorclips.SAVE"
         const val ACTION_STOP = "com.aziz.thorclips.STOP"
         const val ACTION_RESTORE_AUDIO = "com.aziz.thorclips.RESTORE_AUDIO"
+        const val ACTION_SHOT = "com.aziz.thorclips.SHOT"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val CLIP_FOLDER = "DualClips"
@@ -81,7 +82,7 @@ class ReplayService : Service() {
             Shizuku.UserServiceArgs(
                 ComponentName(BuildConfig.APPLICATION_ID, CaptureUserService::class.java.name)
             )
-                .daemon(false)
+                .daemon(true) // keeps recording even if Android closes the app
                 .processNameSuffix("capture")
                 .debuggable(BuildConfig.DEBUG)
                 .version(BuildConfig.VERSION_CODE)
@@ -165,7 +166,15 @@ class ReplayService : Service() {
         }
         when (intent.action) {
             ACTION_START -> if (!running) { settings.wantRunning = true; start(intent) }
-            ACTION_SAVE -> requestSave()
+            ACTION_SAVE, ACTION_SHOT -> {
+                if (running) {
+                    if (intent.action == ACTION_SAVE) requestSave() else requestScreenshot()
+                } else if (settings.wantRunning) {
+                    // Android closed the app but the helper may still be recording: reconnect, then do it.
+                    afterStart = intent.action
+                    startAfterKill()
+                }
+            }
             ACTION_STOP -> { settings.wantRunning = false; shutdown() }
             ACTION_RESTORE_AUDIO -> restoreAudio(intent)
         }
@@ -267,14 +276,27 @@ class ReplayService : Service() {
         override fun onServiceDisconnected(name: ComponentName?) {
             EventLog.add("Shizuku helper disconnected")
             capture = null
-            if (running) {
+            if (!running) return
+            helperMode = false
+            detectHandler.removeCallbacks(pollTask)
+            if (projection != null) {
                 // Shizuku died (Wi-Fi/ADB dropped). Carry on with the top screen only.
                 useShizuku = false
                 glHandler.post {
-                    stopVideo()
-                    startVideo(Live.TOP)
-                    main.post { toast("Shizuku stopped — recording top screen only") }
+                    try {
+                        val top = getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
+                        topId = top.displayId
+                        topSize = Point().also { @Suppress("DEPRECATION") top.getRealSize(it) }
+                        bottomId = null
+                        stopVideo()
+                        startVideo(Live.TOP)
+                        main.post { toast("Shizuku stopped — recording top screen only") }
+                    } catch (t: Throwable) {
+                        main.post { fail("Shizuku stopped: ${t.message}") }
+                    }
                 }
+            } else {
+                main.post { fail("Shizuku stopped. Start it again, then start the clip buffer.") }
             }
         }
     }
@@ -364,29 +386,30 @@ class ReplayService : Service() {
     // ---------------------------------------------------------------- pipeline
 
     /** GL thread: first start after Shizuku (or no-Shizuku) is decided. */
+    /** True when recording happens inside the Shizuku helper (normal case). */
+    @Volatile private var helperMode = false
+    /** Action to run once we're reconnected (e.g. a save requested while the app was closed). */
+    private var afterStart: String? = null
+
+    /** GL thread: first start after Shizuku (or no-Shizuku) is decided. */
     private fun startAll() {
         if (!running) return
         try {
-            val dm = getSystemService(DisplayManager::class.java)
-            val top = dm.getDisplay(Display.DEFAULT_DISPLAY)
-            val bottom = dm.displays.firstOrNull {
-                it.displayId != Display.DEFAULT_DISPLAY && !it.name.contains("thorclips", true) &&
-                    !it.name.contains("dualclips", true)
+            val cap = capture
+            if (useShizuku && cap != null) {
+                startHelper(cap)
+            } else {
+                // No Shizuku: record the top screen inside the app.
+                val dm = getSystemService(DisplayManager::class.java)
+                val top = dm.getDisplay(Display.DEFAULT_DISPLAY)
+                topId = top.displayId
+                topSize = Point().also { @Suppress("DEPRECATION") top.getRealSize(it) }
+                bottomId = null
+                startVideo(Live.TOP)
+                registerScreenReceiver()
             }
-            topId = top.displayId
-            topSize = Point().also { @Suppress("DEPRECATION") top.getRealSize(it) }
-            bottomId = bottom?.displayId
-            bottomSize = bottom?.let { d -> Point().also { @Suppress("DEPRECATION") d.getRealSize(it) } }
 
-            val first = when {
-                !useShizuku || bottomId == null -> Live.TOP
-                settings.screenMode == ScreenMode.TOP -> Live.TOP
-                settings.screenMode == ScreenMode.BOTTOM -> Live.BOTTOM
-                else -> Live.BOTH
-            }
-            startVideo(first)
-
-            if (settings.audio && projection != null &&
+            if (settings.audio && projection != null && audio == null &&
                 checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             ) {
                 try {
@@ -397,17 +420,79 @@ class ReplayService : Service() {
                     Log.w(TAG, "audio unavailable", t)
                 }
             }
-
-            registerScreenReceiver()
-            if (useShizuku && settings.screenMode == ScreenMode.AUTO && bottomId != null) {
-                detectHandler.postDelayed(detectTask, 1500)
-                getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, detectHandler)
-            }
-            EventLog.add("started · shizuku=${useShizuku} · mode=${settings.screenMode.name} · top=$topId bottom=${bottomId ?: "-"}")
+            EventLog.add("started · helper=$helperMode · mode=${settings.screenMode.name}")
             recording = true
+            val pendingAction = afterStart
+            afterStart = null
+            when (pendingAction) {
+                ACTION_SAVE -> main.postDelayed({ saveClip() }, 300)
+                ACTION_SHOT -> main.postDelayed({ requestScreenshot() }, 300)
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
             main.post { fail("Couldn't start: ${t.message}") }
+        }
+    }
+
+    private fun parseStatus(s: String): Map<String, String> =
+        s.split(';').mapNotNull { kv -> kv.indexOf('=').takeIf { it > 0 }?.let { kv.substring(0, it) to kv.substring(it + 1) } }.toMap()
+
+    /** Start (or reconnect to) the recorder inside the Shizuku helper. */
+    private fun startHelper(cap: ICaptureService) {
+        val st = parseStatus(cap.recorderStatus())
+        if (st["state"] == "recording") {
+            EventLog.add("reconnected: helper was still recording")
+        } else {
+            val cfg = Bundle().apply {
+                putInt("width", settings.width)
+                putInt("bitrate", settings.bitrate)
+                putInt("fps", settings.fps)
+                putInt("seconds", settings.seconds)
+                putString("mode", settings.screenMode.name)
+                putStringArray("launchers", launchers.toTypedArray())
+            }
+            if (cap.startRecording(cfg) < 0) {
+                throw IllegalStateException("helper couldn't start: " + parseStatus(cap.recorderStatus())["err"])
+            }
+        }
+        helperMode = true
+        detectHandler.removeCallbacks(pollTask)
+        detectHandler.post(pollTask)
+    }
+
+    /** Every 2 s: read the helper's state (screens, game) and its log. */
+    private val pollTask = object : Runnable {
+        override fun run() {
+            if (!running || !helperMode) return
+            val cap = capture
+            if (cap != null) {
+                try {
+                    val st = parseStatus(cap.recorderStatus())
+                    val newLive = when (st["live"]) { "BOTH" -> Live.BOTH; "TOP" -> Live.TOP; "BOTTOM" -> Live.BOTTOM; else -> null }
+                    st["game"]?.takeIf { it.isNotEmpty() }?.let { lastGame = it }
+                    cap.takeLog().lineSequence().filter { it.isNotBlank() }.forEach { EventLog.add(it) }
+                    diagnostics = "recording (helper): ${st["live"]} · ${st["layout"]} · ${st["codec"]}\n" +
+                        "mode ${settings.screenMode.label} · game ${st["game"]}\n" + runCatching { cap.info() }.getOrDefault("")
+                    if (st["state"] != "recording") {
+                        EventLog.add("helper stopped recording (${st["err"]}), restarting it")
+                        runCatching { startHelper(cap) }.onFailure { EventLog.add("restart failed: ${it.message}") }
+                    }
+                    if (newLive != live) {
+                        val old = live
+                        live = newLive
+                        main.post {
+                            setStatus(statusText()); updateNotification()
+                            if (old != null && newLive != null) {
+                                val label = when (newLive) { Live.BOTH -> "both screens"; Live.TOP -> "top screen"; Live.BOTTOM -> "bottom screen" }
+                                toast("Dual Clips: now recording $label")
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    EventLog.add("helper poll failed: ${t.message}")
+                }
+            }
+            detectHandler.postDelayed(this, 2000)
         }
     }
 
@@ -752,6 +837,7 @@ class ReplayService : Service() {
 
     /** Saves the current frame of the recorded screen(s) as a PNG in Pictures/DualClips. */
     fun requestScreenshot() {
+        if (helperMode) { screenshotViaHelper(); return }
         if (!running || compositor == null) {
             feedback.onFailed("clip buffer is off")
             return
@@ -791,6 +877,7 @@ class ReplayService : Service() {
     }
 
     private fun saveClip() {
+        if (helperMode) { saveViaHelper(); return }
         val ring = videoRing
         val vFmt = videoFormat
         if (!running || ring == null || vFmt == null) {
@@ -841,6 +928,157 @@ class ReplayService : Service() {
             val len = ((video.last().ptsUs - base) / 1_000_000L).toInt()
             EventLog.add(if (ok) "saved ${len}s clip (${live?.name})" else "save failed: $err")
             if (ok) feedback.onSaved(id, len) else feedback.onFailed(err ?: "unknown error")
+        }
+    }
+
+    /** Helper writes the video; we add game audio and put it in Movies/DualClips. */
+    private fun saveViaHelper() {
+        val cap = capture
+        if (!running || cap == null) { feedback.onFailed("recorder not connected"); return }
+        if (saving) { toast("Still saving the last clip…"); return }
+        saving = true
+        buzz()
+        feedback.onPressed()
+        val seconds = settings.seconds
+        val aCap = audio
+        val aFmt = aCap?.format
+        val aRing = aCap?.ring
+        val game = lastGame
+        saveExecutor.execute {
+            val tmp = java.io.File(cacheDir, "clip_video.mp4")
+            var id = -1L
+            var len = 0
+            var err: String? = null
+            try {
+                val pfd = android.os.ParcelFileDescriptor.open(
+                    tmp,
+                    android.os.ParcelFileDescriptor.MODE_READ_WRITE or android.os.ParcelFileDescriptor.MODE_CREATE or
+                        android.os.ParcelFileDescriptor.MODE_TRUNCATE
+                )
+                val base = try { cap.saveClip(pfd, seconds) } finally { runCatching { pfd.close() } }
+                if (base < 0) throw IllegalStateException("nothing recorded yet")
+                val aud = if (aFmt != null && aRing != null) aRing.pinFrom(base, requireKey = false) else emptyList()
+                try {
+                    val r = mergeToStore(tmp, aRing, aud, aFmt, base)
+                    id = r.first; len = r.second
+                } finally {
+                    aRing?.unpin()
+                }
+                if (game != null) clipsPrefs.setGame(id, game)
+            } catch (t: Throwable) {
+                err = t.message ?: t.toString()
+            } finally {
+                tmp.delete()
+                saving = false
+            }
+            EventLog.add(if (err == null) "saved ${len}s clip" else "save failed: $err")
+            if (err == null) feedback.onSaved(id, len) else feedback.onFailed(err)
+        }
+    }
+
+    /** Copies the helper's video into MediaStore, interleaving our game audio. Returns (id, seconds). */
+    private fun mergeToStore(
+        videoFile: java.io.File, aRing: SampleRing?, aud: List<SampleRing.Sample>, aFmt: MediaFormat?, base: Long,
+    ): Pair<Long, Int> {
+        val ex = android.media.MediaExtractor()
+        ex.setDataSource(videoFile.absolutePath)
+        var vTrackIn = -1
+        for (t in 0 until ex.trackCount) {
+            if (ex.getTrackFormat(t).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) { vTrackIn = t; break }
+        }
+        if (vTrackIn < 0) { ex.release(); throw IllegalStateException("no video in clip") }
+        ex.selectTrack(vTrackIn)
+        val name = "DualClip_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + CLIP_FOLDER)
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            ?: run { ex.release(); throw IllegalStateException("couldn't create file") }
+        var lastUs = 0L
+        try {
+            contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
+                val muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                try {
+                    val vOut = muxer.addTrack(ex.getTrackFormat(vTrackIn))
+                    val audio = aud.filter { it.ptsUs >= base }
+                    val aOut = if (aFmt != null && audio.isNotEmpty()) muxer.addTrack(aFmt) else -1
+                    muxer.start()
+                    val buf = ByteBuffer.allocateDirect(4 shl 20)
+                    val info = MediaCodec.BufferInfo()
+                    var ai = 0
+                    var vDone = false
+                    var vSize = ex.readSampleData(buf, 0)
+                    if (vSize < 0) vDone = true
+                    while (!vDone || (aOut >= 0 && ai < audio.size)) {
+                        val vT = if (vDone) Long.MAX_VALUE else ex.sampleTime
+                        val aT = if (aOut >= 0 && ai < audio.size) audio[ai].ptsUs - base else Long.MAX_VALUE
+                        if (vT <= aT) {
+                            val key = ex.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0
+                            info.set(0, vSize, vT, if (key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
+                            muxer.writeSampleData(vOut, buf, info)
+                            lastUs = vT
+                            ex.advance()
+                            buf.clear()
+                            vSize = ex.readSampleData(buf, 0)
+                            if (vSize < 0) vDone = true
+                        } else {
+                            val sm = audio[ai++]
+                            if (aT > lastUs + 2_000_000L && vDone) continue // audio past the end of the video
+                            val ab = ByteBuffer.allocateDirect(sm.size)
+                            aRing!!.read(sm, ab)
+                            info.set(0, sm.size, aT, 0)
+                            muxer.writeSampleData(aOut, ab, info)
+                        }
+                    }
+                    muxer.stop()
+                } finally {
+                    runCatching { muxer.release() }
+                    runCatching { ex.release() }
+                }
+            }
+            values.clear()
+            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            return ContentUris.parseId(uri) to (lastUs / 1_000_000L).toInt()
+        } catch (t: Throwable) {
+            runCatching { contentResolver.delete(uri, null, null) }
+            throw t
+        }
+    }
+
+    private fun screenshotViaHelper() {
+        val cap = capture
+        if (!running || cap == null) { feedback.onFailed("recorder not connected"); return }
+        feedback.onScreenshot()
+        buzz()
+        saveExecutor.execute {
+            val name = "DualShot_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".png"
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + CLIP_FOLDER)
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            if (uri == null) { feedback.onFailed("couldn't create file"); return@execute }
+            val ok = try {
+                contentResolver.openFileDescriptor(uri, "w")!!.use { cap.screenshot(it) }
+            } catch (t: Throwable) {
+                EventLog.add("screenshot failed: ${t.message}"); false
+            }
+            if (ok) {
+                values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                lastGame?.let { clipsPrefs.setGame(ContentUris.parseId(uri), it) }
+                EventLog.add("screenshot saved")
+                feedback.onScreenshotSaved()
+            } else {
+                runCatching { contentResolver.delete(uri, null, null) }
+                feedback.onFailed("screenshot failed")
+            }
         }
     }
 
@@ -937,6 +1175,12 @@ class ReplayService : Service() {
             runCatching { projectionDisplay?.release() }
             projectionDisplay = null
             runCatching { aud?.stop() }
+        }
+        if (helperMode) {
+            val cap = capture
+            runCatching { cap?.takeLog()?.lineSequence()?.filter { it.isNotBlank() }?.forEach { EventLog.add(it) } }
+            runCatching { cap?.stopRecording() }
+            helperMode = false
         }
         if (boundShizuku) {
             runCatching { Shizuku.unbindUserService(userServiceArgs, shizukuConnection, true) }

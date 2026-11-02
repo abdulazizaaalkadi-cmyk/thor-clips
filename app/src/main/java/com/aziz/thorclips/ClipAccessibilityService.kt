@@ -45,7 +45,15 @@ class ClipAccessibilityService : AccessibilityService() {
             EventLog.add("${c.label} pressed")
             val svc = ReplayService.instance
             if (svc != null) action(svc)
-            else {
+            else if (settings.wantRunning && ReplayService.shizukuReady()) {
+                // Android closed the app, but the recorder in the Shizuku helper keeps going:
+                // wake the app up and save from it.
+                EventLog.add("${c.label}: app was closed, reconnecting to the recorder")
+                val act = if (c == settings.shotCombo) ReplayService.ACTION_SHOT else ReplayService.ACTION_SAVE
+                runCatching {
+                    startForegroundService(android.content.Intent(this, ReplayService::class.java).setAction(act))
+                }.onFailure { EventLog.add("couldn't wake the app: ${it.message}") }
+            } else {
                 EventLog.add("${c.label} but buffer is off")
                 Toast.makeText(this, "Dual Clips: buffer is off", Toast.LENGTH_SHORT).show()
             }
