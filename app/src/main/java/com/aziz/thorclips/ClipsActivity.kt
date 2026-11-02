@@ -254,7 +254,6 @@ class ClipsActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
                 background = ui.focusBg(ui.p.surface, ui.dpf(16f))
-                duplicateParentStateEnabled = false
             }
             thumb = ImageView(this@ClipsActivity).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
