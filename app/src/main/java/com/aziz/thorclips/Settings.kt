@@ -33,6 +33,20 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("clip_sound", true)
         set(v) = prefs.edit().putBoolean("clip_sound", v).apply()
 
+    /** Which clip sound: soft, marimba, bubble, glass, pluck, bright. */
+    var clipSoundName: String
+        get() = prefs.getString("clip_sound_name", "soft") ?: "soft"
+        set(v) = prefs.edit().putString("clip_sound_name", v).apply()
+
+    var clipVolume: Float
+        get() = prefs.getFloat("clip_volume", 0.6f)
+        set(v) = prefs.edit().putFloat("clip_volume", v).apply()
+
+    /** How long the clip-saved pop-up stays on screen, in ms. */
+    var popupMs: Long
+        get() = prefs.getLong("popup_ms", 2500L)
+        set(v) = prefs.edit().putLong("popup_ms", v).apply()
+
     var clipPopup: Boolean
         get() = prefs.getBoolean("clip_popup", true)
         set(v) = prefs.edit().putBoolean("clip_popup", v).apply()

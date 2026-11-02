@@ -228,6 +228,22 @@ class Ui(val ctx: Context, val p: Palette) {
             .show()
     }
 
+    /** Like [choose], but tapping an option previews it; "Use" keeps the highlighted one. */
+    fun <T> choosePreview(title: String, options: List<Pair<String, T>>, current: T, onPreview: (T) -> Unit, onPick: (T) -> Unit) {
+        var picked = options.indexOfFirst { it.second == current }.coerceAtLeast(0)
+        dialog().setTitle(title)
+            .setSingleChoiceItems(options.map { it.first }.toTypedArray(), picked) { _, which ->
+                picked = which; onPreview(options[which].second)
+            }
+            .setPositiveButton("Use") { _, _ -> onPick(options[picked].second) }
+            .setNeutralButton("Preview", null)
+            .setNegativeButton("Cancel", null)
+            .show()
+            .also { d ->
+                d.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener { onPreview(options[picked].second) }
+            }
+    }
+
     fun tint(v: TextView, color: Int) {
         v.setTextColor(ColorStateList.valueOf(color))
     }

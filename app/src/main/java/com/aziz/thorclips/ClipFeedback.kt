@@ -34,6 +34,18 @@ class ClipFeedback(private val ctx: Context) {
     companion object {
         private const val CHANNEL = "clip_saved"
         private const val NOTIF_ID = 2
+
+        /** key, label, sound file */
+        val SOUNDS = listOf(
+            Triple("soft", "Soft chime", R.raw.snd_soft),
+            Triple("marimba", "Marimba", R.raw.snd_marimba),
+            Triple("bubble", "Bubble", R.raw.snd_bubble),
+            Triple("glass", "Glass", R.raw.snd_glass),
+            Triple("pluck", "Pluck", R.raw.snd_pluck),
+            Triple("bright", "Bright", R.raw.snd_bright),
+        )
+
+        fun label(key: String) = SOUNDS.firstOrNull { it.first == key }?.second ?: "Soft chime"
     }
 
     private val settings = Settings(ctx)
@@ -48,17 +60,24 @@ class ClipFeedback(private val ctx: Context) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
         ).build()
-    private val chime = pool.load(ctx, R.raw.clip_saved, 1)
-    @Volatile private var loaded = false
-    @Volatile private var playWhenLoaded = false
+    private val ids = SOUNDS.associate { (key, _, res) -> key to pool.load(ctx, res, 1) }
+    private val loaded = HashSet<Int>()
+    private var pending: Pair<Int, Float>? = null
 
     init {
         pool.setOnLoadCompleteListener { p, id, status ->
-            if (id == chime && status == 0) {
-                loaded = true
-                if (playWhenLoaded) { playWhenLoaded = false; p.play(chime, 0.9f, 0.9f, 1, 0, 1f) }
-            }
+            if (status != 0) return@setOnLoadCompleteListener
+            synchronized(loaded) { loaded += id }
+            val want = pending
+            if (want != null && want.first == id) { pending = null; p.play(id, want.second, want.second, 1, 0, 1f) }
         }
+    }
+
+    /** Plays one of the clip sounds (also used for previews in settings). */
+    fun playSound(key: String = settings.clipSoundName, volume: Float = settings.clipVolume) {
+        val id = ids[key] ?: ids["soft"] ?: return
+        val ready = synchronized(loaded) { id in loaded }
+        if (ready) pool.play(id, volume, volume, 1, 0, 1f) else pending = id to volume
     }
 
     fun release() {
@@ -68,20 +87,19 @@ class ClipFeedback(private val ctx: Context) {
 
     /** Instant feedback when the button combo is pressed. */
     fun onPressed() {
-        if (!settings.clipSound) return
-        if (loaded) pool.play(chime, 0.9f, 0.9f, 1, 0, 1f) else playWhenLoaded = true
+        if (settings.clipSound) playSound()
     }
 
     fun onSaved(clipId: Long, seconds: Int) {
         main.post {
-            if (settings.clipPopup) showPopup("Clip saved", "${seconds}s · tap to view")
+            if (settings.clipPopup) showPopup("Clip saved", "${seconds}s · tap to view", settings.popupMs)
             if (settings.clipNotification && clipId >= 0) notifySaved(clipId, seconds)
         }
     }
 
     fun onFailed(msg: String) {
         main.post {
-            if (settings.clipPopup && canOverlay()) showPopup("Clip failed", msg)
+            if (settings.clipPopup && canOverlay()) showPopup("Clip failed", msg, maxOf(settings.popupMs, 3000L))
             else Toast.makeText(ctx, "Clip failed: $msg", Toast.LENGTH_LONG).show()
         }
     }
@@ -90,7 +108,10 @@ class ClipFeedback(private val ctx: Context) {
 
     // ------------------------------------------------------------------ pop-up
 
-    private fun showPopup(title: String, subtitle: String) {
+    /** Preview of the pop-up for a given length (used in settings). */
+    fun previewPopup(ms: Long) = main.post { showPopup("Clip saved", "Preview · ${ms / 1000.0}s", ms) }
+
+    private fun showPopup(title: String, subtitle: String, durationMs: Long) {
         if (!canOverlay()) {
             Toast.makeText(ctx, "$title · $subtitle", Toast.LENGTH_SHORT).show()
             return
@@ -144,7 +165,7 @@ class ClipFeedback(private val ctx: Context) {
                 card.animate().translationX(ui.dpf(320f)).alpha(0f).setDuration(200)
                     .withEndAction { if (popup === card) hidePopup() }.start()
             }
-        }, 2600)
+        }, durationMs)
     }
 
     private fun hidePopup() {

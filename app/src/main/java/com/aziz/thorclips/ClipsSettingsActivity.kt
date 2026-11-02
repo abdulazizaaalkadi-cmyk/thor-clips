@@ -10,6 +10,7 @@ class ClipsSettingsActivity : Activity() {
 
     private lateinit var prefs: ClipsPrefs
     private lateinit var ui: Ui
+    private val feedback by lazy { ClipFeedback(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +49,14 @@ class ClipsSettingsActivity : Activity() {
             ui.choose("Default editor", options, prefs.editor ?: "") { prefs.editor = it.ifEmpty { null }; r() }
         })
 
+        ClipAlertRows.add(this, ui, col, feedback)
+
         setContentView(ScrollView(this).apply { addView(col) })
+    }
+
+    override fun onDestroy() {
+        feedback.release()
+        super.onDestroy()
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
