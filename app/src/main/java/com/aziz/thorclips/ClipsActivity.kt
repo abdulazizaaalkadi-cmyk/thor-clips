@@ -39,6 +39,7 @@ class ClipsActivity : Activity() {
     private var clips: List<Clip> = emptyList()
     private lateinit var grid: GridView
     private lateinit var empty: TextView
+    private lateinit var filterButton: TextView
     private var lookKey = ""
 
     private val main = Handler(Looper.getMainLooper())
@@ -74,9 +75,19 @@ class ClipsActivity : Activity() {
         col.addView(ui.header("My Clips", R.drawable.ic_myclips) {
             startActivity(Intent(this, ClipsSettingsActivity::class.java))
         })
-        col.addView(ui.text("A play · hold Y options · B back", 13f, dim = true)
-            .apply { setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(4)) })
-        empty = ui.text("No clips yet.\nStart the clip buffer in Dual Clips and press L3 + R3 while playing.", 16f, dim = true)
+        val bar = ui.row()
+        bar.addView(ui.text("A open · hold Y options · B back", 13f, dim = true)
+            .apply { setPadding(ui.dp(4), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+        filterButton = ui.secondaryButton("Show: ${prefs.filter.label}") {
+            ui.choose("Show", LibraryFilter.values().map { it.label to it }, prefs.filter) {
+                prefs.filter = it
+                filterButton.text = "Show: ${it.label}"
+                load()
+            }
+        }.apply { textSize = 14f; setPadding(ui.dp(16), ui.dp(10), ui.dp(16), ui.dp(10)) }
+        bar.addView(filterButton)
+        col.addView(bar, ui.lp(top = 10))
+        empty = ui.text("Nothing here yet.\nStart the clip buffer in Dual Clips, then use your clip or screenshot combo while playing.", 16f, dim = true)
             .apply { setPadding(ui.dp(4), ui.dp(24), 0, 0); visibility = View.GONE }
         col.addView(empty)
 
@@ -140,10 +151,10 @@ class ClipsActivity : Activity() {
 
     private fun showMenu(c: Clip) {
         val fav = c.id.toString() in prefs.favourites
-        val items = listOf(
+        val items = listOfNotNull(
             "Rename" to { rename(c) },
             "Open in editor" to { openEditor(c) },
-            "Trim" to { startActivity(Intent(this, TrimActivity::class.java).putExtra("id", c.id)) },
+            if (c.isImage) null else ("Trim" to { startActivity(Intent(this, TrimActivity::class.java).putExtra("id", c.id)) }),
             "Share" to { ClipStore.share(this, c) },
             (if (fav) "Unfavourite" else "Favourite") to { toggleFav(c) },
             "Info" to { showInfo(c) },
@@ -155,6 +166,7 @@ class ClipsActivity : Activity() {
     }
 
     private fun rename(c: Clip) {
+        val kind = if (c.isImage) "screenshot" else "clip"
         val input = EditText(this).apply {
             setText(ClipStore.title(c))
             setSelectAllOnFocus(true)
@@ -164,10 +176,10 @@ class ClipsActivity : Activity() {
             setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0)
             addView(input)
         }
-        ui.dialog().setTitle("Rename clip").setView(box)
+        ui.dialog().setTitle("Rename $kind").setView(box)
             .setPositiveButton("Save") { _, _ ->
                 val ok = runCatching { ClipStore.rename(this, c, input.text.toString()) }.getOrDefault(false)
-                if (!ok) Toast.makeText(this, "Couldn't rename this clip", Toast.LENGTH_SHORT).show()
+                if (!ok) Toast.makeText(this, "Couldn't rename this $kind", Toast.LENGTH_SHORT).show()
                 load()
             }
             .setNegativeButton("Cancel", null).show()
@@ -175,23 +187,23 @@ class ClipsActivity : Activity() {
     }
 
     private fun openEditor(c: Clip) {
-        val saved = ClipStore.decodeEditor(prefs.editor)
+        val saved = ClipStore.decodeEditor(if (c.isImage) prefs.imageEditor else prefs.editor)
         if (saved != null) {
             try {
                 ClipStore.openInEditor(this, c, saved); return
             } catch (_: Throwable) {
-                prefs.editor = null // uninstalled; ask again
+                if (c.isImage) prefs.imageEditor = null else prefs.editor = null // uninstalled; ask again
             }
         }
-        val eds = ClipStore.editors(this)
+        val eds = ClipStore.editors(this, c.mime)
         if (eds.isEmpty()) {
-            Toast.makeText(this, "No video editor found. Install one (e.g. CapCut) first.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, if (c.isImage) "No photo editor found." else "No video editor found. Install one (e.g. CapCut) first.", Toast.LENGTH_LONG).show()
             return
         }
         ui.dialog().setTitle("Open in…")
             .setItems(eds.map { it.label }.toTypedArray()) { _, which ->
                 val e = eds[which]
-                prefs.editor = ClipStore.encodeEditor(e)
+                if (c.isImage) prefs.imageEditor = ClipStore.encodeEditor(e) else prefs.editor = ClipStore.encodeEditor(e)
                 runCatching { ClipStore.openInEditor(this, c, e) }
                     .onFailure { Toast.makeText(this, "${e.label} couldn't open it", Toast.LENGTH_SHORT).show() }
                 Toast.makeText(this, "Will use ${e.label} next time (change in My Clips settings)", Toast.LENGTH_SHORT).show()
@@ -207,12 +219,12 @@ class ClipsActivity : Activity() {
     }
 
     private fun showInfo(c: Clip) {
-        ui.dialog().setTitle("Clip info").setMessage(ClipStore.info(this, c, prefs))
+        ui.dialog().setTitle(if (c.isImage) "Screenshot info" else "Clip info").setMessage(ClipStore.info(this, c, prefs))
             .setPositiveButton("OK", null).show()
     }
 
     private fun confirmDelete(c: Clip) {
-        ui.dialog().setTitle("Delete this clip?")
+        ui.dialog().setTitle(if (c.isImage) "Delete this screenshot?" else "Delete this clip?")
             .setMessage("${ClipStore.title(c)}\n\nThis can't be undone.")
             .setPositiveButton("Delete") { _, _ ->
                 if (ClipStore.delete(this, c, REQ_DELETE)) load()
@@ -272,7 +284,7 @@ class ClipsActivity : Activity() {
         fun bind(c: Clip) {
             boundId = c.id
             val fav = c.id.toString() in prefs.favourites
-            title.text = (if (fav) "★ " else "") + ClipStore.title(c)
+            title.text = (if (fav) "★ " else "") + (if (c.isImage) "▣ " else "") + ClipStore.title(c)
             meta.text = ClipStore.meta(this@ClipsActivity, c)
             if (!prefs.previews) return
             val cached = thumbs.get(c.id)

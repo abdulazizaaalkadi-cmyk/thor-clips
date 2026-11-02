@@ -41,6 +41,16 @@ class ClipsSettingsActivity : Activity() {
         col.addView(ui.settingRow("Sort", { prefs.sort.label }) { r ->
             ui.choose("Sort clips", SortOrder.values().map { it.label to it }, prefs.sort) { prefs.sort = it; r() }
         })
+        col.addView(ui.settingRow("Show", { prefs.filter.label }) { r ->
+            ui.choose("Show", LibraryFilter.values().map { it.label to it }, prefs.filter) { prefs.filter = it; r() }
+        })
+        col.addView(ui.settingRow("Photo editor (screenshots)", {
+            ClipStore.decodeEditor(prefs.imageEditor)?.label ?: "Ask each time"
+        }) { r ->
+            val eds = ClipStore.editors(this, "image/png")
+            val options = listOf("Ask each time" to "") + eds.map { it.label to ClipStore.encodeEditor(it) }
+            ui.choose("Photo editor", options, prefs.imageEditor ?: "") { prefs.imageEditor = it.ifEmpty { null }; r() }
+        })
         col.addView(ui.settingRow("Default editor", {
             ClipStore.decodeEditor(prefs.editor)?.label ?: "Ask each time"
         }) { r ->

@@ -777,6 +777,7 @@ class ReplayService : Service() {
                     contentResolver.openOutputStream(uri)!!.use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                     values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
                     contentResolver.update(uri, values, null, null)
+                    lastGame?.let { clipsPrefs.setGame(ContentUris.parseId(uri), it) }
                     EventLog.add("screenshot saved ${bmp.width}x${bmp.height}")
                     feedback.onScreenshotSaved()
                 } catch (t: Throwable) {

@@ -108,7 +108,7 @@ class ClipFeedback(private val ctx: Context) {
     }
 
     fun onScreenshotSaved() {
-        main.post { if (settings.clipPopup) showPopup("Screenshot saved", "Pictures/DualClips", minOf(settings.popupMs, 2000L)) }
+        main.post { if (settings.clipPopup) showPopup("Screenshot saved", "in My Clips", minOf(settings.popupMs, 2000L)) }
     }
 
     fun onFailed(msg: String) {

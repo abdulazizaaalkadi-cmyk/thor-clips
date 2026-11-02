@@ -17,6 +17,8 @@ enum class Combo(val label: String, val a: Int, val b: Int) {
     OFF("Off", -1, -1),
 }
 
+enum class LibraryFilter(val label: String) { ALL("All"), CLIPS("Clips"), SHOTS("Screenshots") }
+
 enum class SortOrder(val label: String) { NEWEST("Newest first"), OLDEST("Oldest first"), LONGEST("Longest first") }
 
 /** Dual Clips (recorder) settings. */
@@ -125,6 +127,10 @@ class ClipsPrefs(context: Context) {
         get() = prefs.getBoolean("previews", false)
         set(v) = prefs.edit().putBoolean("previews", v).apply()
 
+    var filter: LibraryFilter
+        get() = runCatching { LibraryFilter.valueOf(prefs.getString("filter", "ALL")!!) }.getOrDefault(LibraryFilter.ALL)
+        set(v) = prefs.edit().putString("filter", v.name).apply()
+
     var sort: SortOrder
         get() = runCatching { SortOrder.valueOf(prefs.getString("sort", "NEWEST")!!) }.getOrDefault(SortOrder.NEWEST)
         set(v) = prefs.edit().putString("sort", v.name).apply()
@@ -133,6 +139,11 @@ class ClipsPrefs(context: Context) {
     var editor: String?
         get() = prefs.getString("editor", null)
         set(v) = prefs.edit().putString("editor", v).apply()
+
+    /** Same as [editor], but for screenshots. */
+    var imageEditor: String?
+        get() = prefs.getString("image_editor", null)
+        set(v) = prefs.edit().putString("image_editor", v).apply()
 
     var favourites: Set<String>
         get() = prefs.getStringSet("favs", emptySet()) ?: emptySet()

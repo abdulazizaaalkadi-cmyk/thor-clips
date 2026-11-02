@@ -25,44 +25,19 @@ data class Clip(
     val durationMs: Long,
     val dateSec: Long,
     val sizeBytes: Long,
-)
+    val isImage: Boolean = false,
+) {
+    val mime get() = if (isImage) "image/png" else "video/mp4"
+}
 
 /** Reading, renaming, deleting and trimming clips in Movies/DualClips (and the old ThorClips folder). */
 object ClipStore {
 
     fun list(ctx: Context, prefs: ClipsPrefs): List<Clip> {
         val out = ArrayList<Clip>()
-        val projection = arrayOf(
-            MediaStore.Video.Media._ID,
-            MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.DURATION,
-            MediaStore.Video.Media.DATE_ADDED,
-            MediaStore.Video.Media.SIZE,
-        )
-        ctx.contentResolver.query(
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            projection,
-            "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ? OR ${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?",
-            arrayOf("%Movies/${ReplayService.CLIP_FOLDER}%", "%Movies/ThorClips%"),
-            null
-        )?.use { c ->
-            val iId = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val iName = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val iDur = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
-            val iDate = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
-            val iSize = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-            while (c.moveToNext()) {
-                val id = c.getLong(iId)
-                out += Clip(
-                    id,
-                    ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id),
-                    c.getString(iName) ?: "clip.mp4",
-                    c.getLong(iDur),
-                    c.getLong(iDate),
-                    c.getLong(iSize),
-                )
-            }
-        }
+        val f = prefs.filter
+        if (f != LibraryFilter.SHOTS) out += query(ctx, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "Movies", false)
+        if (f != LibraryFilter.CLIPS) out += query(ctx, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "Pictures", true)
         val favs = prefs.favourites
         val sorted = when (prefs.sort) {
             SortOrder.NEWEST -> out.sortedByDescending { it.dateSec }
@@ -73,17 +48,55 @@ object ClipStore {
         return sorted.sortedByDescending { it.id.toString() in favs }
     }
 
-    fun title(c: Clip) = c.name.removeSuffix(".mp4")
+    private fun query(ctx: Context, table: Uri, root: String, images: Boolean): List<Clip> {
+        val out = ArrayList<Clip>()
+        val projection = arrayListOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.DATE_ADDED,
+            MediaStore.MediaColumns.SIZE,
+        )
+        if (!images) projection += MediaStore.Video.Media.DURATION
+        ctx.contentResolver.query(
+            table,
+            projection.toTypedArray(),
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+            arrayOf("%$root/${ReplayService.CLIP_FOLDER}%", "%$root/ThorClips%"),
+            null
+        )?.use { c ->
+            val iId = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val iName = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val iDate = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+            val iSize = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val iDur = if (images) -1 else c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+            while (c.moveToNext()) {
+                val id = c.getLong(iId)
+                out += Clip(
+                    id,
+                    ContentUris.withAppendedId(table, id),
+                    c.getString(iName) ?: (if (images) "shot.png" else "clip.mp4"),
+                    if (iDur >= 0) c.getLong(iDur) else 0L,
+                    c.getLong(iDate),
+                    c.getLong(iSize),
+                    images,
+                )
+            }
+        }
+        return out
+    }
+
+    fun title(c: Clip) = c.name.substringBeforeLast('.')
 
     fun meta(ctx: Context, c: Clip): String {
-        val secs = c.durationMs / 1000
         val ago = DateUtils.getRelativeTimeSpanString(c.dateSec * 1000)
-        return "${secs}s · $ago · ${Formatter.formatShortFileSize(ctx, c.sizeBytes)}"
+        val kind = if (c.isImage) "Screenshot" else "${c.durationMs / 1000}s"
+        return "$kind · $ago · ${Formatter.formatShortFileSize(ctx, c.sizeBytes)}"
     }
 
     fun rename(ctx: Context, c: Clip, newName: String): Boolean {
         val clean = newName.trim().replace(Regex("""[\\/:*?"<>|]"""), "_").ifEmpty { return false }
-        val v = ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, "$clean.mp4") }
+        val ext = if (c.isImage) "png" else "mp4"
+        val v = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, "$clean.$ext") }
         return ctx.contentResolver.update(c.uri, v, null, null) > 0
     }
 
@@ -99,14 +112,14 @@ object ClipStore {
     }
 
     fun share(a: Activity, c: Clip) {
-        val i = Intent(Intent.ACTION_SEND).setType("video/mp4")
+        val i = Intent(Intent.ACTION_SEND).setType(c.mime)
             .putExtra(Intent.EXTRA_STREAM, c.uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        a.startActivity(Intent.createChooser(i, "Share clip"))
+        a.startActivity(Intent.createChooser(i, if (c.isImage) "Share screenshot" else "Share clip"))
     }
 
     fun play(a: Activity, c: Clip) {
-        val i = Intent(Intent.ACTION_VIEW).setDataAndType(c.uri, "video/mp4")
+        val i = Intent(Intent.ACTION_VIEW).setDataAndType(c.uri, c.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         runCatching { a.startActivity(i) }
     }
@@ -116,12 +129,12 @@ object ClipStore {
     data class Editor(val pkg: String, val cls: String, val action: String, val label: String)
 
     /** Apps that can edit a video (ACTION_EDIT), plus apps that accept one (ACTION_SEND) as a fallback. */
-    fun editors(ctx: Context): List<Editor> {
+    fun editors(ctx: Context, mime: String = "video/mp4"): List<Editor> {
         val pm = ctx.packageManager
         val seen = HashSet<String>()
         val out = ArrayList<Editor>()
         for (action in listOf(Intent.ACTION_EDIT, Intent.ACTION_SEND)) {
-            val i = Intent(action).setType("video/mp4")
+            val i = Intent(action).setType(mime)
             @Suppress("DEPRECATION")
             for (ri in pm.queryIntentActivities(i, PackageManager.MATCH_DEFAULT_ONLY)) {
                 val pkg = ri.activityInfo.packageName
@@ -137,15 +150,16 @@ object ClipStore {
 
     private fun looksLikeEditor(pkg: String, label: String): Boolean {
         val s = (pkg + " " + label).lowercase()
-        return listOf("edit", "capcut", "lemon", "vn", "inshot", "kinemaster", "powerdirector", "cut", "video", "movie", "studio")
+        return listOf("edit", "capcut", "lemon", "vn", "inshot", "kinemaster", "powerdirector", "cut", "video", "movie", "studio",
+            "photo", "snapseed", "lightroom", "picsart", "canva", "gallery", "markup")
             .any { s.contains(it) }
     }
 
     fun openInEditor(a: Activity, c: Clip, e: Editor) {
         val i = Intent(e.action).setClassName(e.pkg, e.cls)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        if (e.action == Intent.ACTION_EDIT) i.setDataAndType(c.uri, "video/mp4")
-        else i.setType("video/mp4").putExtra(Intent.EXTRA_STREAM, c.uri)
+        if (e.action == Intent.ACTION_EDIT) i.setDataAndType(c.uri, c.mime)
+        else i.setType(c.mime).putExtra(Intent.EXTRA_STREAM, c.uri)
         a.startActivity(i)
     }
 
@@ -158,9 +172,17 @@ object ClipStore {
     // ---------------------------------------------------------------- info
 
     fun info(ctx: Context, c: Clip, prefs: ClipsPrefs): String {
-        val mmr = MediaMetadataRetriever()
         var res = "?"
-        try {
+        if (c.isImage) {
+            runCatching {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                ctx.contentResolver.openInputStream(c.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+                res = "${o.outWidth} × ${o.outHeight}"
+            }
+        }
+        if (!c.isImage) {
+            val mmr = MediaMetadataRetriever()
+            try {
             mmr.setDataSource(ctx, c.uri)
             val w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
             val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
@@ -168,6 +190,7 @@ object ClipStore {
         } catch (_: Throwable) {
         } finally {
             runCatching { mmr.release() }
+        }
         }
         val game = prefs.gameFor(c.id)?.let { pkg ->
             runCatching {
@@ -179,7 +202,8 @@ object ClipStore {
             ctx, c.dateSec * 1000,
             DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_YEAR
         )
-        return "Name: ${title(c)}\nGame: $game\nLength: ${c.durationMs / 1000}s\n" +
+        val length = if (c.isImage) "Screenshot" else "${c.durationMs / 1000}s"
+        return "Name: ${title(c)}\nGame: $game\nLength: $length\n" +
             "Size: ${Formatter.formatFileSize(ctx, c.sizeBytes)}\nResolution: $res\nSaved: $date"
     }
 
