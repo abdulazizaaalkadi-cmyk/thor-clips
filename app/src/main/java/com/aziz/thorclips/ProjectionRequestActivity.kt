@@ -9,6 +9,10 @@ import android.widget.Toast
 /** Invisible screen that shows Android's capture prompt, starts the buffer, and closes. */
 class ProjectionRequestActivity : Activity() {
 
+    companion object {
+        const val EXTRA_RESTORE = "restore_audio"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState != null) return
@@ -21,7 +25,16 @@ class ProjectionRequestActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode == RESULT_OK && data != null) {
+        if (resultCode == RESULT_OK && data != null && intent.getBooleanExtra(EXTRA_RESTORE, false) &&
+            ReplayService.instance != null
+        ) {
+            startService(
+                Intent(this, ReplayService::class.java)
+                    .setAction(ReplayService.ACTION_RESTORE_AUDIO)
+                    .putExtra(ReplayService.EXTRA_CODE, resultCode)
+                    .putExtra(ReplayService.EXTRA_DATA, data)
+            )
+        } else if (resultCode == RESULT_OK && data != null) {
             startForegroundService(
                 Intent(this, ReplayService::class.java)
                     .setAction(ReplayService.ACTION_START)

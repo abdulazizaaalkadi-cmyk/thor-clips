@@ -59,6 +59,7 @@ class ReplayService : Service() {
         const val ACTION_START = "com.aziz.thorclips.START"
         const val ACTION_SAVE = "com.aziz.thorclips.SAVE"
         const val ACTION_STOP = "com.aziz.thorclips.STOP"
+        const val ACTION_RESTORE_AUDIO = "com.aziz.thorclips.RESTORE_AUDIO"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val CLIP_FOLDER = "DualClips"
@@ -161,6 +162,7 @@ class ReplayService : Service() {
             ACTION_START -> if (!running) start(intent)
             ACTION_SAVE -> requestSave()
             ACTION_STOP -> shutdown()
+            ACTION_RESTORE_AUDIO -> restoreAudio(intent)
         }
         return START_NOT_STICKY
     }
@@ -262,9 +264,64 @@ class ReplayService : Service() {
             audio = null
             glHandler.post { runCatching { a?.stop() } }
             EventLog.add("still recording video via Shizuku (game audio paused)")
-            toast("Dual Clips: still recording (game audio off until restart)")
+            toast("Dual Clips: still recording — game audio paused")
+            notifyAudioPaused()
         } else {
             fail("Android stopped screen capture")
+        }
+    }
+
+    /** One-tap restore: the notification opens Android's capture prompt again. */
+    private fun notifyAudioPaused() {
+        val nm = getSystemService(NotificationManager::class.java)
+        val tap = PendingIntent.getActivity(
+            this, 20,
+            Intent(this, ProjectionRequestActivity::class.java)
+                .putExtra(ProjectionRequestActivity.EXTRA_RESTORE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val n = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.presence_audio_online)
+            .setContentTitle("Game audio paused")
+            .setContentText("Video is still recording. Tap to turn game audio back on.")
+            .setStyle(Notification.BigTextStyle().bigText(
+                "Another app (often a dual-screen mod) took Android's screen-capture permission, " +
+                    "which Dual Clips uses for game audio. Video is still recording. " +
+                    "Tap to restore audio — if the other app's second screen stops, skip this."
+            ))
+            .setAutoCancel(true)
+            .setContentIntent(tap)
+            .addAction(Notification.Action.Builder(null, "Restore audio", tap).build())
+            .build()
+        nm.notify(3, n)
+    }
+
+    private fun restoreAudio(intent: Intent) {
+        if (!running) return
+        val code = intent.getIntExtra(EXTRA_CODE, 0)
+        @Suppress("DEPRECATION")
+        val data = intent.getParcelableExtra<Intent>(EXTRA_DATA) ?: return
+        val proj = getSystemService(MediaProjectionManager::class.java).getMediaProjection(code, data) ?: return
+        proj.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() { main.post { onProjectionStopped() } }
+        }, main)
+        projection = proj
+        getSystemService(NotificationManager::class.java).cancel(3)
+        if (!settings.audio ||
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) return
+        glHandler.post {
+            try {
+                runCatching { audio?.stop() }
+                val windowUs = (settings.seconds + 3) * 1_000_000L
+                val aRing = SampleRing((128_000L / 8 * (settings.seconds + 3) * 3 / 2).toInt(), windowUs)
+                audio = AudioCapture(proj, aRing).also { it.start() }
+                EventLog.add("game audio restored")
+                main.post { toast("Game audio is back on") }
+            } catch (t: Throwable) {
+                EventLog.add("audio restore failed: ${t.message}")
+            }
         }
     }
 
@@ -877,5 +934,10 @@ class ReplayService : Service() {
     private fun updateNotification() {
         if (!running) return
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        EventLog.add("onLowMemory")
     }
 }
