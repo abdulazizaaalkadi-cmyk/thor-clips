@@ -92,6 +92,17 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service
+            android:name=".SaverTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="Clip saver"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".ClipTileService"
             android:exported="true"
             android:icon="@drawable/ic_tile"

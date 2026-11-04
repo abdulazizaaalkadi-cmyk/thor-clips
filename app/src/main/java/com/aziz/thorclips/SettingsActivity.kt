@@ -37,6 +37,12 @@ class SettingsActivity : Activity() {
         })
 
         col.addView(ui.section("Recording"))
+        col.addView(ui.settingRow("Battery saver", { if (s.batterySaver) "On" else "Off" }) { r ->
+            SaverTileService.toggle(this); r()
+        })
+        col.addView(ui.text("Battery saver records at 30 fps with a lower bitrate, checks screens less often, " +
+            "and pauses whenever no game is open (Cocoon, settings…). Also a Quick Settings tile: \"Clip saver\".",
+            13f, dim = true).apply { setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(6)) })
         col.addView(ui.settingRow("Clip length", { "${s.seconds} s" }) { r ->
             ui.choose("Clip length", listOf("10 s" to 10, "15 s" to 15, "30 s" to 30, "60 s" to 60, "120 s" to 120), s.seconds) { s.seconds = it; r() }
         })
@@ -45,7 +51,7 @@ class SettingsActivity : Activity() {
                 s.quality = it; r()
             }
         })
-        col.addView(ui.settingRow("Frame rate", { "${s.fps} fps" }) { r ->
+        col.addView(ui.settingRow("Frame rate", { if (s.batterySaver) "30 fps (saver)" else "${s.fps} fps" }) { r ->
             ui.choose("Frame rate", listOf("30 fps" to 30, "60 fps" to 60), s.fps) { s.fps = it; r() }
         })
         col.addView(ui.settingRow("Screens", { s.screenMode.label }) { r ->

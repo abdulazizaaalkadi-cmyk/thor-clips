@@ -143,7 +143,8 @@ class MainActivity : Activity() {
             else -> "Clip buffer is off"
         }
         detailView.text = if (err) ReplayService.status.removePrefix("Error: ") else
-            "${settings.seconds}s clips · ${settings.qualityLabel} · ${settings.fps} fps · " +
+            "${settings.seconds}s clips · ${settings.qualityLabel} · ${settings.effectiveFps} fps" +
+                (if (settings.batterySaver) " · Battery saver" else "") + " · " +
                 "${settings.screenMode.label} · ~${settings.estimateMb()} MB RAM"
         toggle.text = if (on || (ReplayService.instance != null && !err)) "Stop clip buffer" else "Start clip buffer"
         tileHint.visibility = if (on) View.GONE else View.VISIBLE

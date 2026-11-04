@@ -61,6 +61,7 @@ class ReplayService : Service() {
         const val ACTION_STOP = "com.aziz.thorclips.STOP"
         const val ACTION_RESTORE_AUDIO = "com.aziz.thorclips.RESTORE_AUDIO"
         const val ACTION_SHOT = "com.aziz.thorclips.SHOT"
+        const val ACTION_APPLY = "com.aziz.thorclips.APPLY"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val CLIP_FOLDER = "DualClips"
@@ -178,6 +179,7 @@ class ReplayService : Service() {
             }
             ACTION_STOP -> { settings.wantRunning = false; shutdown() }
             ACTION_RESTORE_AUDIO -> restoreAudio(intent)
+            ACTION_APPLY -> applySettingsLive()
         }
         return START_STICKY
     }
@@ -452,6 +454,22 @@ class ReplayService : Service() {
         }
     }
 
+    /** Restart the helper's recording with the current settings (e.g. Battery saver toggled). */
+    private fun applySettingsLive() {
+        val cap = capture
+        if (!running || !helperMode || cap == null) return
+        glHandler.post {
+            try {
+                cap.stopRecording()
+                startHelper(cap)
+                EventLog.add("settings applied (battery saver ${if (settings.batterySaver) "on" else "off"})")
+                main.post { setStatus(statusText()); updateNotification() }
+            } catch (t: Throwable) {
+                EventLog.add("apply failed: ${t.message}")
+            }
+        }
+    }
+
     private fun parseStatus(s: String): Map<String, String> =
         s.split(';').mapNotNull { kv -> kv.indexOf('=').takeIf { it > 0 }?.let { kv.substring(0, it) to kv.substring(it + 1) } }.toMap()
 
@@ -463,8 +481,10 @@ class ReplayService : Service() {
         } else {
             val cfg = Bundle().apply {
                 putInt("width", settings.width)
-                putInt("bitrate", settings.bitrate)
-                putInt("fps", settings.fps)
+                putInt("bitrate", settings.effectiveBitrate)
+                putInt("fps", settings.effectiveFps)
+                putBoolean("gameOnly", settings.batterySaver)
+                putLong("windowMs", if (settings.batterySaver) 8000L else 4000L)
                 putInt("seconds", settings.seconds)
                 putString("mode", settings.screenMode.name)
                 putStringArray("launchers", launchers.toTypedArray())
@@ -594,7 +614,8 @@ class ReplayService : Service() {
             Live.BOTTOM -> "bottom screen"
             null -> "—"
         }
-        val extra = if (!useShizuku) " (Shizuku off)" else if (settings.screenMode == ScreenMode.AUTO) " · auto" else ""
+        val extra = (if (!useShizuku) " (Shizuku off)" else if (settings.screenMode == ScreenMode.AUTO) " · auto" else "") +
+            (if (settings.batterySaver) " · saver" else "")
         return "Recording $what$extra"
     }
 

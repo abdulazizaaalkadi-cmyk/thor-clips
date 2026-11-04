@@ -64,6 +64,10 @@ class HelperRecorder(
     @Volatile private var audio: HelperAudio? = null
     @Volatile private var audioState = "off"
     private var wantAudio = true
+    /** Battery saver: only encode while a game is open; check apps less often. */
+    private var gameOnly = false
+    private var windowMs = 4000L
+    @Volatile private var noGame = false
     private var voiceChat = true
     private var appUid = -1
     @Volatile private var format: MediaFormat? = null
@@ -101,6 +105,10 @@ class HelperRecorder(
         seconds = cfg.getInt("seconds", 30)
         mode = cfg.getString("mode", "AUTO") ?: "AUTO"
         wantAudio = cfg.getBoolean("audio", true)
+        gameOnly = cfg.getBoolean("gameOnly", false)
+        windowMs = cfg.getLong("windowMs", 4000L)
+        noGame = false
+        suspended = false
         voiceChat = cfg.getBoolean("voiceChat", true)
         appUid = cfg.getInt("appUid", -1)
         launchers = (cfg.getStringArray("launchers") ?: emptyArray()).toSet() +
@@ -123,7 +131,7 @@ class HelperRecorder(
                 result = 0
                 startAudio()
                 note("started mode=$mode ${width}w ${fps}fps ${seconds}s top=$topId bottom=${bottomId ?: "-"}")
-                if (mode == "AUTO" && bottomId != null) {
+                if ((mode == "AUTO" && bottomId != null) || gameOnly) {
                     detH.removeCallbacksAndMessages(null)
                     detH.postDelayed(detectTask, 800)
                 }
@@ -347,7 +355,7 @@ class HelperRecorder(
         override fun run() {
             if (!running) return
             runCatching { detect() }.onFailure { note("detect: ${it.message}") }
-            detH.postDelayed(this, 700)
+            detH.postDelayed(this, if (gameOnly) 1500 else 700)
         }
     }
 
@@ -356,39 +364,48 @@ class HelperRecorder(
      * A sleeping screen is dropped straight away; game changes need two matching readings.
      */
     private fun detect() {
-        val bId = bottomId ?: return
+        val bId = bottomId
         val topAwake = awake(topId)
-        val botAwake = awake(bId)
-
-        // Both asleep: pause the encoder so it doesn't burn power.
-        val allAsleep = !topAwake && !botAwake
-        if (allAsleep != suspended) {
-            suspended = allAsleep
-            glH.post {
-                compositor?.paused = allAsleep
-                runCatching { encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_SUSPEND, if (allAsleep) 1 else 0) }) }
-                if (!allAsleep) requestKeyframe()
-            }
-            note(if (allAsleep) "both screens asleep: paused" else "screen on: resumed")
-        }
-        if (allAsleep) return
+        val botAwake = bId?.let { awake(it) } ?: false
+        val autoSwitch = mode == "AUTO" && bId != null
 
         val now = System.currentTimeMillis()
-        val sleepRule = !topAwake || !botAwake
+        val sleepRule = bId != null && topAwake != botAwake
         var t: String? = null
         var b: String? = null
-        if (!sleepRule && now - lastWindowCheck >= 4000) {
+        var checked = false
+        if ((topAwake || botAwake) && now - lastWindowCheck >= windowMs) {
             lastWindowCheck = now
+            checked = true
             val snap = runCatching { windows() }.getOrDefault("")
             val types = setOf("BASE_APPLICATION", "APPLICATION", "PRESENTATION", "PRIVATE_PRESENTATION", "?")
             fun on(d: Int) = snap.lineSequence().map { it.split('|') }
                 .filter { it.size >= 3 && it[0].toIntOrNull() == d && it[2] in types }
                 .map { it[1] }.firstOrNull { it !in launchers }
-            t = on(topId); b = on(bId)
+            t = if (topAwake) on(topId) else null
+            b = if (bId != null && botAwake) on(bId) else null
             if (t != null || b != null) game = t ?: b ?: ""
-        } else if (!sleepRule) {
-            return // nothing new to decide until the next window check
+            noGame = t == null && b == null
         }
+
+        // Pause the encoder while both screens sleep, or (battery saver) while no game is open.
+        val allAsleep = !topAwake && (bId == null || !botAwake)
+        val shouldPause = allAsleep || (gameOnly && noGame)
+        if (shouldPause != suspended) {
+            suspended = shouldPause
+            glH.post {
+                compositor?.paused = shouldPause
+                runCatching { encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_SUSPEND, if (shouldPause) 1 else 0) }) }
+                if (!shouldPause) requestKeyframe()
+            }
+            note(when {
+                !shouldPause -> "resumed"
+                allAsleep -> "both screens asleep: paused"
+                else -> "no game open: paused (battery saver)"
+            })
+        }
+        if (allAsleep || !autoSwitch) return
+        if (!checked && !sleepRule) return // nothing new to decide until the next window check
 
         val want: Live? = when {
             topAwake && !botAwake -> Live.TOP

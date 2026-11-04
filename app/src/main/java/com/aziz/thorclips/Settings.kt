@@ -117,6 +117,23 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("voice_chat", true)
         set(v) = prefs.edit().putBoolean("voice_chat", v).apply()
 
+    /** Battery saver: 30 fps, lower bitrate, only record while a game is open. */
+    var batterySaver: Boolean
+        get() = prefs.getBoolean("battery_saver", false)
+        set(v) = prefs.edit().putBoolean("battery_saver", v).apply()
+
+    val effectiveFps: Int get() = if (batterySaver) 30 else fps
+
+    val effectiveBitrate: Int
+        get() {
+            val base = intArrayOf(5_000_000, 9_000_000, 16_000_000)[quality.coerceIn(0, 2)]
+            return when {
+                batterySaver -> base * 13 / 20      // 30 fps, ~35% less data
+                fps >= 60 -> base * 7 / 5
+                else -> base
+            }
+        }
+
     var screenMode: ScreenMode
         get() = runCatching { ScreenMode.valueOf(prefs.getString("screens", "AUTO")!!) }.getOrDefault(ScreenMode.AUTO)
         set(v) = prefs.edit().putString("screens", v.name).apply()
